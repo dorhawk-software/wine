@@ -4737,20 +4737,30 @@ NTSTATUS virtual_handle_fault( struct thread_data *data, EXCEPTION_RECORD *rec, 
 #ifdef WX_EXCLUSIVE_HOST
     if (is_vprot_exec_write( vprot ) && !(vprot & VPROT_GUARD))
     {
-        if (err == EXCEPTION_EXECUTE_FAULT && !(vprot & VPROT_EXECMODE))
+        /* another thread may already have flipped the page the way we need it */
+        if (err == EXCEPTION_EXECUTE_FAULT)
         {
-            TRACE( "flipping %p to executable\n", page );
-            set_page_vprot_bits( page, host_page_size, VPROT_EXECMODE, 0 );
-            mprotect_range( page, host_page_size, 0, 0 );
-            ret = STATUS_SUCCESS;
-            goto done;
+            if (!(vprot & VPROT_EXECMODE))
+            {
+                TRACE( "flipping %p to executable\n", page );
+                set_page_vprot_bits( page, host_page_size, VPROT_EXECMODE, 0 );
+                mprotect_range( page, host_page_size, 0, 0 );
+            }
+            if (get_unix_prot( get_host_page_vprot( page )) & PROT_EXEC)
+            {
+                ret = STATUS_SUCCESS;
+                goto done;
+            }
         }
-        if (err == EXCEPTION_WRITE_FAULT && (vprot & VPROT_EXECMODE))
+        else if (err == EXCEPTION_WRITE_FAULT)
         {
-            TRACE( "flipping %p to writable\n", page );
-            set_page_vprot_bits( page, host_page_size, 0, VPROT_EXECMODE );
-            mprotect_range( page, host_page_size, 0, 0 );
-            vprot = get_host_page_vprot( page );
+            if (vprot & VPROT_EXECMODE)
+            {
+                TRACE( "flipping %p to writable\n", page );
+                set_page_vprot_bits( page, host_page_size, 0, VPROT_EXECMODE );
+                mprotect_range( page, host_page_size, 0, 0 );
+                vprot = get_host_page_vprot( page );
+            }
             if (get_unix_prot( vprot ) & PROT_WRITE)
             {
                 ret = STATUS_SUCCESS;
