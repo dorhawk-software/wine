@@ -1005,6 +1005,11 @@ static NTSTATUS unwind_builtin_dll( void *args )
 #endif /* SO_DLLS_SUPPORTED */
 
 
+static NTSTATUS steamclient_setup_trampolines( void *args );
+#ifdef _WIN64
+static NTSTATUS wow64_steamclient_setup_trampolines( void *args );
+#endif
+
 static const unixlib_entry_t unix_call_funcs[] =
 {
     load_so_dll,
@@ -1015,6 +1020,7 @@ static const unixlib_entry_t unix_call_funcs[] =
     unixcall_wine_server_handle_to_fd,
     unixcall_wine_spawnvp,
     system_time_precise,
+    steamclient_setup_trampolines,
 };
 
 
@@ -1033,6 +1039,7 @@ const unixlib_entry_t unix_call_wow64_funcs[] =
     wow64_wine_server_handle_to_fd,
     wow64_wine_spawnvp,
     system_time_precise,
+    wow64_steamclient_setup_trampolines,
 };
 
 #endif  /* _WIN64 */
@@ -1544,6 +1551,102 @@ static const void *get_module_data_dir( HMODULE module, ULONG dir, ULONG *size )
     if (size) *size = data->Size;
     return get_rva( module, data->VirtualAddress );
 }
+
+
+/***********************************************************************
+ *           steamclient_setup_trampolines
+ *
+ * Redirect the exports and entry point of a game's steamclient.dll to lsteamclient.dll,
+ * which bridges to the host Steam client. Adapted from Valve's Proton.
+ */
+static void steamclient_write_jump_x64( void *src_addr, ULONGLONG tgt_addr )
+{
+    static const BYTE mov[] = {0x48, 0xb8};  /* movabs $tgt_addr, %rax */
+    static const BYTE jmp[] = {0xff, 0xe0};  /* jmp *%rax */
+    memcpy( src_addr, mov, sizeof(mov) );
+    memcpy( (char *)src_addr + sizeof(mov), &tgt_addr, sizeof(tgt_addr) );
+    memcpy( (char *)src_addr + sizeof(mov) + sizeof(tgt_addr), jmp, sizeof(jmp) );
+}
+
+static void steamclient_write_jump_x86( void *src_addr, ULONG tgt_addr )
+{
+    static const BYTE mov[] = {0xb8};        /* mov $tgt_addr, %eax */
+    static const BYTE jmp[] = {0xff, 0xe0};  /* jmp *%eax */
+    memcpy( src_addr, mov, sizeof(mov) );
+    memcpy( (char *)src_addr + sizeof(mov), &tgt_addr, sizeof(tgt_addr) );
+    memcpy( (char *)src_addr + sizeof(mov) + sizeof(tgt_addr), jmp, sizeof(jmp) );
+}
+
+static NTSTATUS steamclient_setup_trampolines( void *args )
+{
+    struct steamclient_setup_trampolines_params *params = args;
+    HMODULE src_mod = params->src_mod, tgt_mod = params->tgt_mod;
+    IMAGE_NT_HEADERS *src_nt = get_rva( src_mod, ((IMAGE_DOS_HEADER *)src_mod)->e_lfanew );
+    IMAGE_NT_HEADERS *tgt_nt = get_rva( tgt_mod, ((IMAGE_DOS_HEADER *)tgt_mod)->e_lfanew );
+    IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION( src_nt );
+    BOOL x64 = src_nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+    const IMAGE_EXPORT_DIRECTORY *src_exp, *tgt_exp;
+    const DWORD *names;
+    void *src_addr, *tgt_addr;
+    ULONG src_entry, tgt_entry, old_prot;
+    int i;
+
+    /* Make the code writable through the virtual memory APIs; on hosts that can't map
+     * pages writable and executable at once, pages are then flipped on demand. */
+    for (i = 0; i < src_nt->FileHeader.NumberOfSections; i++)
+    {
+        void *addr = get_rva( src_mod, sec[i].VirtualAddress );
+        SIZE_T size = sec[i].Misc.VirtualSize;
+
+        if (memcmp( sec[i].Name, ".text", 5 )) continue;
+        NtProtectVirtualMemory( NtCurrentProcess(), &addr, &size, PAGE_EXECUTE_READWRITE, &old_prot );
+    }
+
+    if (!(src_exp = get_module_data_dir( src_mod, IMAGE_DIRECTORY_ENTRY_EXPORT, NULL )) ||
+        !(tgt_exp = get_module_data_dir( tgt_mod, IMAGE_DIRECTORY_ENTRY_EXPORT, NULL )))
+        return STATUS_INVALID_IMAGE_FORMAT;
+
+    names = get_rva( src_mod, src_exp->AddressOfNames );
+    for (i = 0; i < src_exp->NumberOfNames; i++)
+    {
+        const char *name = get_rva( src_mod, names[i] );
+
+        if (!(src_addr = (void *)find_named_export( src_mod, src_exp, name ))) continue;
+        if (!(tgt_addr = (void *)find_named_export( tgt_mod, tgt_exp, name ))) continue;
+        if (x64) steamclient_write_jump_x64( src_addr, (ULONG_PTR)tgt_addr );
+        else steamclient_write_jump_x86( src_addr, PtrToUlong( tgt_addr ));
+    }
+
+    if (x64)
+    {
+        src_entry = ((IMAGE_NT_HEADERS64 *)src_nt)->OptionalHeader.AddressOfEntryPoint;
+        tgt_entry = ((IMAGE_NT_HEADERS64 *)tgt_nt)->OptionalHeader.AddressOfEntryPoint;
+        steamclient_write_jump_x64( get_rva( src_mod, src_entry ), (ULONG_PTR)get_rva( tgt_mod, tgt_entry ));
+    }
+    else
+    {
+        src_entry = ((IMAGE_NT_HEADERS32 *)src_nt)->OptionalHeader.AddressOfEntryPoint;
+        tgt_entry = ((IMAGE_NT_HEADERS32 *)tgt_nt)->OptionalHeader.AddressOfEntryPoint;
+        steamclient_write_jump_x86( get_rva( src_mod, src_entry ), PtrToUlong( get_rva( tgt_mod, tgt_entry )));
+    }
+    return STATUS_SUCCESS;
+}
+
+#ifdef _WIN64
+static NTSTATUS wow64_steamclient_setup_trampolines( void *args )
+{
+    struct
+    {
+        ULONG src_mod;
+        ULONG tgt_mod;
+    } const *params32 = args;
+    struct steamclient_setup_trampolines_params params;
+
+    params.src_mod = ULongToPtr( params32->src_mod );
+    params.tgt_mod = ULongToPtr( params32->tgt_mod );
+    return steamclient_setup_trampolines( &params );
+}
+#endif
 
 /***********************************************************************
  *           load_ntdll_functions

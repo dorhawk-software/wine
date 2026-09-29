@@ -1139,6 +1139,28 @@ void * WINAPI RtlFindExportedRoutineByName( HMODULE module, const char *name )
  * Import the dll specified by the given import descriptor.
  * The loader_section must be locked while calling this function.
  */
+/* private flag: the entry point was redirected to lsteamclient, don't call it */
+#define LDR_DONT_CALL_DLLMAIN 0x20000000
+
+/*************************************************************************
+ *		use_lsteamclient
+ *
+ * Whether games' steamclient.dll is redirected to lsteamclient.dll, which bridges to the
+ * host Steam client. Set HADRON_DISABLE_LSTEAMCLIENT=1 to disable.
+ */
+static BOOL use_lsteamclient(void)
+{
+    static int use = -1;
+    WCHAR buffer[8];
+    UNICODE_STRING name = RTL_CONSTANT_STRING( L"HADRON_DISABLE_LSTEAMCLIENT" );
+    UNICODE_STRING value = { 0, sizeof(buffer), buffer };
+
+    if (use != -1) return use;
+    use = RtlQueryEnvironmentVariable_U( NULL, &name, &value ) || !value.Length || buffer[0] == '0';
+    if (!use) ERR( "lsteamclient disabled\n" );
+    return use;
+}
+
 static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, LPCWSTR load_path, WINE_MODREF **pwm )
 {
     HMODULE module = wm->ldr.DllBase;
@@ -1168,6 +1190,16 @@ static BOOL import_dll( WINE_MODREF *wm, const IMAGE_IMPORT_DESCRIPTOR *descr, L
         WARN( "Skipping unused import %s\n", name );
         *pwm = NULL;
         return TRUE;
+    }
+
+    /* the host Steam client provides these to steamclient64.dll; lsteamclient doesn't need them */
+    if (use_lsteamclient() && (!strcmp( name, "tier0_s64.dll" ) || !strcmp( name, "vstdlib_s64.dll" )) &&
+        wm->ldr.BaseDllName.Buffer && (!wcsicmp( wm->ldr.BaseDllName.Buffer, L"steamclient64.dll" ) ||
+                                       !wcsicmp( wm->ldr.BaseDllName.Buffer, L"gameoverlayrenderer64.dll" )))
+    {
+        TRACE( "%s -> ntdll.dll\n", name );
+        name = "ntdll.dll";
+        len = strlen( name );
     }
 
     status = build_import_name( wm, buffer, name, len );
@@ -1799,7 +1831,8 @@ static NTSTATUS process_attach( LDR_DDAG_NODE *node, LPVOID lpReserved )
     if (status == STATUS_SUCCESS)
     {
         call_ldr_notifications( LDR_DLL_NOTIFICATION_REASON_LOADED, &wm->ldr );
-        status = MODULE_InitDLL( wm, DLL_PROCESS_ATTACH, lpReserved );
+        if (!(wm->ldr.Flags & LDR_DONT_CALL_DLLMAIN))
+            status = MODULE_InitDLL( wm, DLL_PROCESS_ATTACH, lpReserved );
         if (status == STATUS_SUCCESS)
         {
             wm->ldr.Flags |= LDR_PROCESS_ATTACHED;
@@ -2264,6 +2297,75 @@ done:
  *
  * Build the module data for a mapped dll.
  */
+/*************************************************************************
+ *		redirect_steamclient
+ *
+ * Point the exports of a game's steamclient.dll (and the overlay renderer) at
+ * lsteamclient.dll. Adapted from Valve's Proton.
+ */
+static void redirect_steamclient( WINE_MODREF *wm, LPCWSTR load_path, const UNICODE_STRING *nt_name,
+                                  IMAGE_NT_HEADERS *nt, SIZE_T map_size, DWORD *flags )
+{
+    static HMODULE lsteamclient;
+    UNICODE_STRING lsteamclient_name = RTL_CONSTANT_STRING( L"lsteamclient.dll" );
+    struct steamclient_setup_trampolines_params params;
+    const WCHAR *basename = nt_name->Buffer, *p;
+    ULONG len;
+    BOOL is_steamclient32;
+
+    for (p = nt_name->Buffer; p < nt_name->Buffer + nt_name->Length / sizeof(WCHAR); p++)
+        if (*p == '\\' || *p == '/') basename = p + 1;
+    len = nt_name->Length / sizeof(WCHAR) - (basename - nt_name->Buffer);
+    if (len >= 4 && !wcsnicmp( basename + len - 4, L".dll", 4 )) len -= 4;
+
+    is_steamclient32 = !RtlCompareUnicodeStrings( basename, len, L"steamclient", 11, TRUE );
+    if (!is_steamclient32 && RtlCompareUnicodeStrings( basename, len, L"steamclient64", 13, TRUE ) &&
+        RtlCompareUnicodeStrings( basename, len, L"gameoverlayrenderer", 19, TRUE ) &&
+        RtlCompareUnicodeStrings( basename, len, L"gameoverlayrenderer64", 21, TRUE ))
+        return;
+
+    if (!lsteamclient && LdrLoadDll( load_path, 0, &lsteamclient_name, &lsteamclient ))
+    {
+        ERR( "failed to load lsteamclient.dll, %s will talk to Windows Steam\n", debugstr_us( nt_name ));
+        return;
+    }
+    TRACE( "redirecting %s to lsteamclient\n", debugstr_us( nt_name ));
+
+    params.src_mod = wm->ldr.DllBase;
+    params.tgt_mod = lsteamclient;
+    WINE_UNIX_CALL( unix_steamclient_setup_trampolines, &params );
+    NtFlushInstructionCache( NtCurrentProcess(), wm->ldr.DllBase, map_size );
+
+    if (is_steamclient32)
+    {
+        /* keep its references unresolved and report the image base from the file,
+         * as games check it (from Proton) */
+        OBJECT_ATTRIBUTES attr;
+        void *addr = wm->ldr.DllBase;
+        SIZE_T size = 0x1000;
+        LARGE_INTEGER offset;
+        IO_STATUS_BLOCK io;
+        ULONG old_prot;
+        HANDLE file;
+
+        wm->ldr.Flags |= LDR_DONT_RESOLVE_REFS;
+        *flags |= LDR_DONT_RESOLVE_REFS;
+
+        NtProtectVirtualMemory( NtCurrentProcess(), &addr, &size, PAGE_READWRITE, &old_prot );
+        InitializeObjectAttributes( &attr, (UNICODE_STRING *)nt_name, OBJ_CASE_INSENSITIVE, 0, NULL );
+        if (!NtOpenFile( &file, GENERIC_READ | SYNCHRONIZE, &attr, &io, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                         FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE ))
+        {
+            offset.QuadPart = (ULONG_PTR)&nt->OptionalHeader.ImageBase - (ULONG_PTR)wm->ldr.DllBase;
+            NtReadFile( file, 0, NULL, NULL, &io, &nt->OptionalHeader.ImageBase,
+                        sizeof(nt->OptionalHeader.ImageBase), &offset, NULL );
+            NtClose( file );
+        }
+        NtProtectVirtualMemory( NtCurrentProcess(), &addr, &size, old_prot, &old_prot );
+    }
+    else wm->ldr.Flags |= LDR_DONT_CALL_DLLMAIN;
+}
+
 static NTSTATUS build_module( LPCWSTR load_path, const UNICODE_STRING *nt_name, void **module,
                               const SECTION_IMAGE_INFORMATION *image_info, const struct file_id *id,
                               DWORD flags, BOOL system, BOOL redirected, WINE_MODREF **pwm )
@@ -2295,6 +2397,8 @@ static NTSTATUS build_module( LPCWSTR load_path, const UNICODE_STRING *nt_name, 
     wm->system = system;
 
     update_load_config( *module );
+
+    if (use_lsteamclient()) redirect_steamclient( wm, load_path, nt_name, nt, map_size, &flags );
 
     /* fixup imports */
 

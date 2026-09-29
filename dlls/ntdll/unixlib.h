@@ -76,6 +76,13 @@ enum ntdll_unix_funcs
     unix_wine_server_handle_to_fd,
     unix_wine_spawnvp,
     unix_system_time_precise,
+    unix_steamclient_setup_trampolines,
+};
+
+struct steamclient_setup_trampolines_params
+{
+    HMODULE src_mod;
+    HMODULE tgt_mod;
 };
 
 extern unixlib_handle_t __wine_unixlib_handle;
