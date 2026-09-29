@@ -74,6 +74,28 @@ static void init_reserved_areas(void)
     }
 }
 
+#elif defined(__APPLE__) && defined(__aarch64__)
+
+/* arm64 macOS normally refuses mappings below 4GB. With the cross-architecture entitlement
+ * the kernel keeps only one hard page of the 4GB __PAGEZERO and maps the rest as a
+ * replaceable PROT_NONE region, which nothing else can have claimed before main() runs.
+ * Turn it into Wine's low reserved area. Without the entitlement the mapping fails and
+ * Wine runs without low memory. */
+static const struct wine_preload_info low_reserve[] =
+{
+    { (void *)0x10000, 0x100000000 - 0x10000 },  /* 64KB - 4GB */
+    { 0, 0 }                                      /* end of list */
+};
+
+const __attribute((visibility("default"))) struct wine_preload_info *wine_main_preload_info = NULL;
+
+static void init_reserved_areas(void)
+{
+    if (mmap( low_reserve[0].addr, low_reserve[0].size, PROT_NONE,
+              MAP_FIXED | MAP_NORESERVE | MAP_PRIVATE | MAP_ANON, -1, 0 ) == low_reserve[0].addr)
+        wine_main_preload_info = low_reserve;
+}
+
 #else
 
 /* the preloader will set this variable */
@@ -157,6 +179,15 @@ static void *try_dlopen( const char *argv0 )
 
     if ((p = remove_tail( dir, "/loader" )))
         path = build_path( p, "dlls/ntdll/ntdll.so" );
+#ifdef __APPLE__
+    /* the loader can run from an app bundle next to ntdll.so, e.g. wine.app/Contents/MacOS/wine,
+     * so that it can carry entitlements granted by a provisioning profile */
+    else if ((p = remove_tail( dir, ".app/Contents/MacOS" )) && strrchr( p, '/' ))
+    {
+        *strrchr( p, '/' ) = 0;
+        path = build_path( p, "ntdll.so" );
+    }
+#endif
     else
         path = build_path( dir, "ntdll.so" );
 
