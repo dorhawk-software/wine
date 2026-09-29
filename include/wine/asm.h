@@ -269,13 +269,18 @@
          "ret\n\t" \
          ".seh_endproc" :: "i" (id) )
 #elif defined __arm64ec_x64__
+# ifdef WINE_HIGH_USER_SHARED_DATA
+#  define __ASM_SYSCALL_TEST_USD ".byte 0x39,0xc0,0x66,0x0f,0x1f,0x44,0x00,0x00\n\t" /* 08: cmpl %eax,%eax; nopw */
+# else
+#  define __ASM_SYSCALL_TEST_USD ".byte 0xf6,0x04,0x25,0x08,0x03,0xfe,0x7f,0x01\n\t" /* 08: testb $1,0x7ffe0308 */
+# endif
 # define __ASM_SYSCALL_FUNC(id,name) \
     __ASM_DEFINE_FUNC( "\"EXP+#" #name "\"", \
                        ".seh_endprologue\n\t" \
                        ".byte 0x4c,0x8b,0xd1\n\t" /* 00: movq %rcx,%r10 */ \
                        ".byte 0xb8\n\t"           /* 03: movl $i,%eax */ \
                        ".long (" #id ")\n\t"                            \
-                       ".byte 0xf6,0x04,0x25,0x08,0x03,0xfe,0x7f,0x01\n\t" /* 08: testb $1,0x7ffe0308 */ \
+                       __ASM_SYSCALL_TEST_USD \
                        ".byte 0x75,0x03\n\t"      /* 10: jne 15 */ \
                        ".byte 0x0f,0x05\n\t"      /* 12: syscall */ \
                        ".byte 0xc3\n\t"           /* 14: ret */ \

@@ -39,7 +39,7 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(process);
 
-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
+static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)MM_SHARED_USER_DATA_VA;
 
 typedef struct
 {

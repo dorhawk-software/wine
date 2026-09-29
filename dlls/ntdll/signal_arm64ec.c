@@ -1973,8 +1973,13 @@ static void __attribute__((naked)) arm64x_check_call(void)
          ".Lsyscall_seq:\n\t"
          ".byte 0x4c, 0x8b, 0xd1\n\t"       /* mov  %rcx,%r10 */
          ".byte 0xb8, 0, 0, 0, 0\n\t"       /* mov  $xxx,%eax */
+#ifdef WINE_HIGH_USER_SHARED_DATA
+         ".byte 0x39, 0xc0, 0x66, 0x0f\n\t" /* cmpl %eax,%eax; nopw 0(%rax,%rax) */
+         ".byte 0x1f, 0x44, 0x00, 0x00\n\t"
+#else
          ".byte 0xf6, 0x04, 0x25, 0x08\n\t" /* testb $0x1,0x7ffe0308 */
          ".byte 0x03, 0xfe, 0x7f, 0x01\n\t"
+#endif
          ".byte 0x75, 0x03\n\t"             /* jne 1f */
          ".byte 0x0f, 0x05\n\t"             /* syscall */
          ".byte 0xc3\n\t"                   /* ret */

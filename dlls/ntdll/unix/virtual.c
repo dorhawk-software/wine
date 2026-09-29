@@ -183,7 +183,11 @@ static const UINT_PTR host_page_mask = 0xfff;
 #endif
 
 /* Note: these are Windows limits, you cannot change them. */
+#ifdef WINE_HIGH_USER_SHARED_DATA
+static void *address_space_start = (void *)0x7000000000;  /* arm64 macOS reserves 4GB-0x7000000000 */
+#else
 static void *address_space_start = (void *)0x10000;
+#endif
 #ifdef _WIN64
 static void *address_space_limit = (void *)0x7fffffff0000;  /* top of the total available address space */
 static void *user_space_limit    = (void *)0x7fffffff0000;  /* top of the user address space */
@@ -199,7 +203,7 @@ static void *host_addr_space_limit;  /* top of the host virtual address space */
 static struct file_view *arm64ec_view;
 
 ULONG_PTR user_space_wow_limit = 0;
-struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
+struct _KUSER_SHARED_DATA *user_shared_data = (void *)MM_SHARED_USER_DATA_VA;
 
 /* TEB allocation blocks */
 static void *teb_block;
@@ -758,8 +762,10 @@ static void mmap_init( const struct preload_info *preload_info )
 #else
     reserve_area( (void *)0x7ffff0000000, (void *)0x7ffffe000000 ); /* top-down area */
     if (preload_info) return;
+#ifndef WINE_HIGH_USER_SHARED_DATA
     reserve_area( (void *)0x000000010000, (void *)0x000068000000 );
     reserve_area( (void *)0x00007f000000, (void *)0x00007fff0000 );
+#endif
 #endif
 }
 

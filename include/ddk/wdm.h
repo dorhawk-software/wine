@@ -1479,6 +1479,16 @@ typedef struct _KUSER_SHARED_DATA {
 
 C_ASSERT( sizeof(KUSER_SHARED_DATA) == 0x738 );
 
+/* Hosts that cannot map below 4GB (arm64 macOS without the cross-architecture
+ * entitlement) can build with WINE_HIGH_USER_SHARED_DATA to move it; only 64-bit
+ * programs that don't hardcode the address will work. arm64 macOS also refuses
+ * mappings between 4GB and 0x7000000000, so use an address above 1TB. */
+#ifdef WINE_HIGH_USER_SHARED_DATA
+#define MM_SHARED_USER_DATA_VA 0x1007ffe0000
+#else
+#define MM_SHARED_USER_DATA_VA 0x7ffe0000
+#endif
+
 #define SHARED_GLOBAL_FLAGS_QPC_BYPASS_ENABLED 0x01
 #define SHARED_GLOBAL_FLAGS_QPC_BYPASS_USE_HV_PAGE 0x02
 #define SHARED_GLOBAL_FLAGS_QPC_BYPASS_DISABLE_32BIT 0x04
