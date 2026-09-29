@@ -27,6 +27,8 @@
 #include "config.h"
 
 #include <assert.h>
+#include <dlfcn.h>
+#include <stdbool.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -1675,6 +1677,32 @@ void init_syscall_frame( LPTHREAD_START_ROUTINE entry, void *arg, TEB *teb )
 
     pthread_sigmask( SIG_UNBLOCK, &server_block_set, NULL );
 }
+
+
+#ifdef __APPLE__
+/***********************************************************************
+ *           enable_custom_x18_abi
+ *
+ * arm64 macOS zeroes x18 on context switches unless the thread opts into the
+ * custom x18 ABI (macOS 26.4+, requires com.apple.security.custom-x18-abi-toggle).
+ * x18 holds the TEB, so every thread running Windows code must opt in.
+ */
+void enable_custom_x18_abi(void)
+{
+    static void (*pset)(bool);
+    static bool (*pget)(void);
+    static int initialized;
+
+    if (!initialized)
+    {
+        pset = dlsym( RTLD_DEFAULT, "os_set_custom_x18_abi_enabled" );
+        pget = dlsym( RTLD_DEFAULT, "os_custom_x18_abi_enabled" );
+        if (!pset || !pget) ERR( "custom x18 ABI not available, x18 will not be preserved\n" );
+        initialized = 1;
+    }
+    if (pset && pget && !pget()) pset( true );
+}
+#endif
 
 
 /***********************************************************************
