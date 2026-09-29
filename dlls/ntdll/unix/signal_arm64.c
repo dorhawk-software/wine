@@ -29,6 +29,9 @@
 #include <assert.h>
 #include <dlfcn.h>
 #include <stdbool.h>
+#ifdef __APPLE__
+#include <mach/kern_return.h>
+#endif
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -1701,6 +1704,29 @@ void enable_custom_x18_abi(void)
         initialized = 1;
     }
     if (pset && pget && !pget()) pset( true );
+}
+
+/***********************************************************************
+ *           enable_hardware_tso
+ *
+ * x86 emulators need x86's stronger memory ordering. Apple silicon provides it in hardware
+ * (TSO), enabled per thread by thread_set_x86_64_compat(); this requires the
+ * cross-architecture entitlement and fails harmlessly without it.
+ */
+void enable_hardware_tso(void)
+{
+    static kern_return_t (*pset)(uint32_t);
+    static int initialized;
+
+    if (!initialized)
+    {
+        /* opt-in: TSO also applies to native code on the thread (e.g. graphics drivers), and has
+         * been seen to make games far slower overall */
+        const char *env = getenv( "HADRON_HARDWARE_TSO" );
+        if (env && !strcmp( env, "1" )) pset = dlsym( RTLD_DEFAULT, "thread_set_x86_64_compat" );
+        initialized = 1;
+    }
+    if (pset && pset( 1 )) pset = NULL;  /* not entitled: don't retry on every thread */
 }
 #endif
 

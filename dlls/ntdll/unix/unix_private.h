@@ -357,8 +357,10 @@ extern void signal_init_process( TEB *teb );
 extern void DECLSPEC_NORETURN signal_start_thread( PRTL_THREAD_START_ROUTINE entry, void *arg, TEB *teb );
 #if defined(__APPLE__) && defined(__aarch64__)
 extern void enable_custom_x18_abi(void);
+extern void enable_hardware_tso(void);
 #else
 static inline void enable_custom_x18_abi(void) {}
+static inline void enable_hardware_tso(void) {}
 #endif
 extern SYSTEM_SERVICE_TABLE KeServiceDescriptorTable[4];
 extern void __wine_syscall_dispatcher(void);
