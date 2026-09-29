@@ -714,6 +714,10 @@ static void reserve_area( void *addr, void *end )
 }
 
 
+#if defined(_WIN64) && defined(__APPLE__)
+static void *get_host_addr_space_limit(void);
+#endif
+
 static void mmap_init( const struct preload_info *preload_info )
 {
 #ifndef _WIN64
@@ -760,7 +764,11 @@ static void mmap_init( const struct preload_info *preload_info )
         reserve_area( user_space_limit, 0 );
 
 #else
+#ifdef __APPLE__
+    reserve_area( (void *)0x7ffff0000000, get_host_addr_space_limit() ); /* top-down area */
+#else
     reserve_area( (void *)0x7ffff0000000, (void *)0x7ffffe000000 ); /* top-down area */
+#endif
     if (preload_info) return;
 #ifndef WINE_HIGH_USER_SHARED_DATA
     reserve_area( (void *)0x000000010000, (void *)0x000068000000 );
@@ -2778,8 +2786,10 @@ static NTSTATUS map_pe_header( void *ptr, size_t size, size_t map_size, int fd, 
 static void *get_host_addr_space_limit(void)
 {
 #ifdef __APPLE__
-    /* See MACH_VM_MAX_ADDRESS_RAW in xnu osfmk/mach/arm/vm_param.h */
-    return (void *)0x7ffffe000000;
+    /* See MACH_VM_MAX_ADDRESS_RAW in xnu osfmk/mach/arm/vm_param.h. Stay 16MB below it:
+     * copyinstr() validates the full maximum length, so exec fails with EFAULT when
+     * argument or environment strings (e.g. on a thread stack) are near the top. */
+    return (void *)(0x7ffffe000000 - 0x1000000);
 #else
     unsigned int flags = MAP_PRIVATE | MAP_ANON;
     UINT_PTR addr = (UINT_PTR)1 << 63;
