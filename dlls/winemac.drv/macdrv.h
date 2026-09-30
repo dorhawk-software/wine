@@ -227,6 +227,7 @@ struct macdrv_win_data
     HWND                hwnd;                   /* hwnd that this private data belongs to */
     WineWindow         *cocoa_window;
     WineContentView    *client_view;
+    struct client_surface *metal_client_surface; /* client surface holding the view of an external Metal layer (DXMT, mtld3d) */
     struct window_rects rects;                  /* window rects in monitor DPI, relative to parent client area */
     int                 pixel_format;           /* pixel format for GL */
     HANDLE              drag_event;             /* event to signal that Cocoa-driven window dragging has ended */

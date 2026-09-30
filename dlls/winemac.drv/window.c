@@ -1258,6 +1258,7 @@ LRESULT macdrv_DesktopWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 void macdrv_DestroyWindow(HWND hwnd)
 {
     struct macdrv_win_data *data;
+    struct client_surface *metal_client_surface;
 
     TRACE("%p\n", hwnd);
 
@@ -1267,9 +1268,13 @@ void macdrv_DestroyWindow(HWND hwnd)
 
     destroy_cocoa_window(data);
 
+    metal_client_surface = data->metal_client_surface;
     CFDictionaryRemoveValue(win_datas, hwnd);
     release_win_data(data);
     free(data);
+
+    /* win32u has detached it already; the release takes the surfaces lock, so after the win data's */
+    if (metal_client_surface) client_surface_release(metal_client_surface);
 }
 
 
@@ -2236,8 +2241,45 @@ static struct dxmt_win_data *dxmt_get_win_data(HWND hwnd)
     has_client_view = data->client_view != NULL;
     release_win_data(data);
 
-    /* the client view only exists once a client surface has been created */
-    if (!has_client_view) macdrv_CreateClientSurface(hwnd, 0, FALSE);
+    /* The client view only exists once a client surface has been created. Take one the way
+     * the Vulkan surfaces do, and keep it in use until the window is destroyed: win32u then
+     * keeps the view's frame in step with the window's client area, which DXMT and mtld3d,
+     * presenting to their own layer rather than through client_surface_present, never ask for.
+     * A window that kept one from an earlier device, whose view a window surface flush has
+     * since hidden, presents it again instead. */
+    if (!has_client_view)
+    {
+        struct client_surface *client = NULL;
+
+        if ((data = get_win_data(hwnd)))
+        {
+            if ((client = data->metal_client_surface)) client_surface_add_ref(client);
+            release_win_data(data);
+        }
+        if (client)
+        {
+            client_surface_present(client);
+            client_surface_release(client);
+        }
+        else if ((client = get_unused_client_surface(hwnd, 0, FALSE)))
+        {
+            use_window_client_surface(client, TRUE);
+            if ((data = get_win_data(hwnd)))
+            {
+                if (!data->metal_client_surface)
+                {
+                    data->metal_client_surface = client;
+                    client = NULL;
+                }
+                release_win_data(data);
+            }
+            if (client)
+            {
+                use_window_client_surface(client, FALSE);
+                client_surface_release(client);
+            }
+        }
+    }
 
     if (!(data = get_win_data(hwnd))) return NULL;
     if (!data->client_view || !(ret = malloc(sizeof(*ret))))
