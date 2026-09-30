@@ -809,6 +809,13 @@ static NSString* WineLocalizedString(unsigned int stringID)
         return ret;
     }
 
+    /* Capture just the display whose mode changes. Windows changes the mode of one monitor and
+     * leaves the others as they are; CGCaptureAllDisplays would black out every other screen. */
+    - (BOOL) captureDisplay:(CGDirectDisplayID)displayID
+    {
+        return CGDisplayIsCaptured(displayID) || CGDisplayCapture(displayID) == CGDisplayNoErr;
+    }
+
     - (BOOL) setMode:(CGDisplayModeRef)mode forDisplay:(CGDirectDisplayID)displayID
     {
         BOOL ret = FALSE;
@@ -835,6 +842,8 @@ static NSString* WineLocalizedString(unsigned int stringID)
                     if (CGDisplaySetDisplayMode(displayID, mode, NULL) == CGDisplayNoErr)
                     {
                         [originalDisplayModes removeObjectForKey:displayIDKey];
+                        if (!displaysCapturedForFullscreen)
+                            CGDisplayRelease(displayID);
                         ret = TRUE;
                         break;
                     }
@@ -869,8 +878,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
 
             BOOL active = [NSApp isActive];
 
-            if ([originalDisplayModes count] || displaysCapturedForFullscreen ||
-                !active || CGCaptureAllDisplays() == CGDisplayNoErr)
+            if (displaysCapturedForFullscreen || !active || [self captureDisplay:displayID])
             {
                 if (active)
                 {
@@ -896,11 +904,12 @@ static NSString* WineLocalizedString(unsigned int stringID)
                     }
                     if (ret && !(currentMode && [self mode:mode matchesMode:currentMode]))
                         [originalDisplayModes setObject:(id)originalMode forKey:displayIDKey];
-                    else if (![originalDisplayModes count])
+                    else
                     {
-                        CGRestorePermanentDisplayConfiguration();
-                        if (!displaysCapturedForFullscreen)
-                            CGReleaseAllDisplays();
+                        if (![originalDisplayModes count])
+                            CGRestorePermanentDisplayConfiguration();
+                        if (!displaysCapturedForFullscreen && !originalDisplayModes[displayIDKey])
+                            CGDisplayRelease(displayID);
                     }
 
                     if (currentMode)
