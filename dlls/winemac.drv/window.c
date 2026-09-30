@@ -2285,8 +2285,8 @@ __attribute__((visibility("default"))) const struct
     dxmt_get_cocoa_window,
     macdrv_create_metal_device,
     macdrv_release_metal_device,
-    macdrv_view_create_metal_view,
+    macdrv_view_create_external_metal_view,
     macdrv_view_get_metal_layer,
-    macdrv_view_release_metal_view,
+    macdrv_view_release_external_metal_view,
     NULL,
 };

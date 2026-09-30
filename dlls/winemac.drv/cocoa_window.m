@@ -253,6 +253,7 @@ static inline BOOL stage_manager_enabled(void)
 
     WineMetalView *_metalView;
     NSMutableDictionary<NSNumber*, CALayerHost*>* _caLayerHosts;
+    int _externalMetalViews;
 }
 
 @property (readonly, nonatomic) BOOL everHadGLContext;
@@ -265,6 +266,8 @@ static inline BOOL stage_manager_enabled(void)
     - (void) wine_setBackingSize:(const int*)newBackingSize;
 
     - (WineMetalView*) newMetalViewWithDevice:(id<MTLDevice>)device;
+    - (void) addExternalMetalView:(int)delta;
+    - (BOOL) hasExternalMetalView;
     - (void) addCALayerHostViewWithContextId:(CAContextID)contextId;
     - (void) removeCALayerHostView:(CAContextID)contextId;
 
@@ -579,6 +582,16 @@ static inline BOOL stage_manager_enabled(void)
         [(WineWindow*)self.window windowDidDrawContent];
 
         return _metalView;
+    }
+
+    - (void) addExternalMetalView:(int)delta
+    {
+        __atomic_add_fetch(&_externalMetalViews, delta, __ATOMIC_RELAXED);
+    }
+
+    - (BOOL) hasExternalMetalView
+    {
+        return __atomic_load_n(&_externalMetalViews, __ATOMIC_RELAXED) > 0;
     }
 
     - (void) addCALayerHostViewWithContextId:(CAContextID)contextId
@@ -3683,6 +3696,51 @@ void macdrv_view_release_metal_view(WineMetalView *view)
         [view removeFromSuperview];
         [view release];
     });
+}
+
+/***********************************************************************
+ *              macdrv_view_create_external_metal_view
+ *
+ * Create a Metal view for a graphics layer outside the driver (DXMT, mtld3d), which presents
+ * to its CAMetalLayer directly rather than through a client surface. While such a view exists,
+ * its content view stays visible across window surface flushes; see
+ * macdrv_view_has_external_metal_view.
+ */
+WineMetalView *macdrv_view_create_external_metal_view(WineContentView *view, id<MTLDevice> device)
+{
+    __block WineMetalView *metalView;
+
+    OnMainThread(^{
+        metalView = [view newMetalViewWithDevice:device];
+        if (metalView) [view addExternalMetalView:1];
+    });
+
+    return metalView;
+}
+
+/***********************************************************************
+ *              macdrv_view_release_external_metal_view
+ */
+void macdrv_view_release_external_metal_view(WineMetalView *view)
+{
+    OnMainThread(^{
+        NSView *superview = [view superview];
+        if ([superview isKindOfClass:[WineContentView class]])
+            [(WineContentView*)superview addExternalMetalView:-1];
+        [view removeFromSuperview];
+        [view release];
+    });
+}
+
+/***********************************************************************
+ *              macdrv_view_has_external_metal_view
+ *
+ * Whether an external graphics layer currently presents into the view. Safe to call from any
+ * thread.
+ */
+bool macdrv_view_has_external_metal_view(WineContentView *view)
+{
+    return view && [view hasExternalMetalView];
 }
 
 @protocol WineMetalSwapChain <NSObject>

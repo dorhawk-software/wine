@@ -121,10 +121,12 @@ static BOOL macdrv_surface_flush(struct window_surface *window_surface, const RE
 
     /* The window may have been previously drawn with client_surface, for example, when the window
      * had been a target for a D3D swapchain. Hide the client_view so that it doesn't occlude the
-     * content in the window_surface */
+     * content in the window_surface. A view an external graphics layer (DXMT, mtld3d) still
+     * presents into stays: such a layer never goes through client_surface_present, which would
+     * show the view again, and its next present covers the GDI content, as on Windows. */
     if ((data = get_win_data(window_surface->hwnd)))
     {
-        if (data->client_view)
+        if (data->client_view && !macdrv_view_has_external_metal_view(data->client_view))
         {
             macdrv_set_view_hidden(data->client_view, TRUE);
             data->client_view = NULL;
