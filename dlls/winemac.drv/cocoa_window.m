@@ -97,11 +97,17 @@ static BOOL frame_intersects_screens(NSRect frame, NSArray* screens)
 }
 
 
+/* A screen with a pending display mode (set while the app was inactive, realized on activation)
+   also counts as covered by a rect that covers it in that mode: Win32 already sees that mode and
+   sizes fullscreen windows for it, and Cocoa must not constrain them meanwhile. */
 static NSScreen* screen_covered_by_rect(NSRect rect, NSArray* screens)
 {
+    WineApplicationController* controller = [WineApplicationController sharedController];
+
     for (NSScreen* screen in screens)
     {
-        if (NSContainsRect(rect, [screen frame]))
+        if (NSContainsRect(rect, [screen frame]) ||
+            NSContainsRect(rect, [controller pendingModeFrameForScreen:screen]))
             return screen;
     }
     return nil;

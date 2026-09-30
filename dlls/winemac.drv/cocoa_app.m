@@ -920,6 +920,26 @@ static NSString* WineLocalizedString(unsigned int stringID)
         return ret;
     }
 
+    - (CGDisplayModeRef) latentModeForDisplay:(CGDirectDisplayID)displayID
+    {
+        return (CGDisplayModeRef)latentDisplayModes[[NSNumber numberWithUnsignedInt:displayID]];
+    }
+
+    // The frame the screen will have once its pending mode is realized, anchored at its
+    // top-left corner like Win32 coordinates, or NSZeroRect when no mode is pending.
+    - (NSRect) pendingModeFrameForScreen:(NSScreen*)screen
+    {
+        NSNumber* displayID = [screen deviceDescription][@"NSScreenNumber"];
+        CGDisplayModeRef mode = displayID ? (CGDisplayModeRef)latentDisplayModes[displayID] : NULL;
+        NSRect frame = [screen frame];
+        size_t width, height;
+
+        if (!mode) return NSZeroRect;
+        width = CGDisplayModeGetWidth(mode);
+        height = CGDisplayModeGetHeight(mode);
+        return NSMakeRect(NSMinX(frame), NSMaxY(frame) - height, width, height);
+    }
+
     - (BOOL) areDisplaysCaptured
     {
         return ([originalDisplayModes count] > 0 || displaysCapturedForFullscreen);
@@ -2445,6 +2465,25 @@ int macdrv_set_display_mode(CGDirectDisplayID displayID, CGDisplayModeRef displa
 
     OnMainThread(^{
         ret = [[WineApplicationController sharedController] setMode:display_mode forDisplay:displayID];
+    });
+
+    return ret;
+}
+
+/***********************************************************************
+ *              macdrv_copy_latent_display_mode
+ *
+ * Returns the mode a display change made while the app was inactive will
+ * switch the display to once the app is activated, or NULL if none is
+ * pending.  The caller must release it.
+ */
+CGDisplayModeRef macdrv_copy_latent_display_mode(CGDirectDisplayID displayID)
+{
+    __block CGDisplayModeRef ret;
+
+    OnMainThread(^{
+        WineApplicationController* controller = [WineApplicationController sharedController];
+        ret = CGDisplayModeRetain((CGDisplayModeRef)[controller latentModeForDisplay:displayID]);
     });
 
     return ret;

@@ -873,13 +873,24 @@ static DEVMODEW *display_get_modes(CGDirectDisplayID display_id, int *modes_coun
     return devmodes;
 }
 
-static void display_get_current_mode(struct macdrv_monitor *monitor, DEVMODEW *devmode)
+/* Returns whether the mode is a latent one, see below. */
+static BOOL display_get_current_mode(struct macdrv_monitor *monitor, DEVMODEW *devmode)
 {
     CGDisplayModeRef display_mode;
     CGDirectDisplayID display_id;
+    BOOL latent;
 
     display_id = monitor->id;
-    display_mode = CGDisplayCopyDisplayMode(display_id);
+    /* A mode change made while the app is inactive is only carried out once the app is activated
+       (see -[WineApplicationController setMode:forDisplay:]). ChangeDisplaySettings has succeeded
+       by then, and on Windows the new mode is in effect when it returns: callers size their
+       fullscreen windows from the monitor rect right away. So report the pending mode as the
+       current one; activation then only realizes it. */
+    if ((latent = (display_mode = macdrv_copy_latent_display_mode(display_id)) != NULL))
+        TRACE("display %u: reporting the pending mode %zux%zu\n", display_id,
+              CGDisplayModeGetWidth(display_mode), CGDisplayModeGetHeight(display_mode));
+    else
+        display_mode = CGDisplayCopyDisplayMode(display_id);
 
     devmode->dmPosition.x = CGRectGetMinX(monitor->rc_monitor);
     devmode->dmPosition.y = CGRectGetMinY(monitor->rc_monitor);
@@ -898,6 +909,7 @@ static void display_get_current_mode(struct macdrv_monitor *monitor, DEVMODEW *d
     }
 
     CFRelease(display_mode);
+    return latent;
 }
 
 /***********************************************************************
@@ -1091,11 +1103,22 @@ UINT macdrv_UpdateDisplayDevices(const struct gdi_device_manager *device_manager
                     .edid = monitor->edid,
                     .hdr_enabled = monitor->hdr_enabled,
                 };
-                device_manager->add_monitor( &gdi_monitor, param );
 
-                /* Get the current mode */
-                if (monitor->id == adapter->id)
-                    display_get_current_mode(monitor, &current_mode);
+                /* Get the current mode; a pending one also sizes the monitor, keeping the
+                   work area's insets */
+                if (monitor->id == adapter->id &&
+                    display_get_current_mode(monitor, &current_mode))
+                {
+                    RECT *rc = &gdi_monitor.rc_monitor, *work = &gdi_monitor.rc_work;
+                    int dx = rc->left + current_mode.dmPelsWidth - rc->right;
+                    int dy = rc->top + current_mode.dmPelsHeight - rc->bottom;
+
+                    rc->right += dx;
+                    rc->bottom += dy;
+                    work->right = max(work->left, work->right + dx);
+                    work->bottom = max(work->top, work->bottom + dy);
+                }
+                device_manager->add_monitor( &gdi_monitor, param );
             }
 
             if (!(modes = display_get_modes(adapter->id, &mode_count))) break;

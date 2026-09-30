@@ -124,6 +124,9 @@ enum {
     - (void) window:(WineWindow*)window isBeingDragged:(BOOL)dragged;
     - (void) windowWillOrderOut:(WineWindow*)window;
 
+    - (CGDisplayModeRef) latentModeForDisplay:(CGDirectDisplayID)displayID;
+    - (NSRect) pendingModeFrameForScreen:(NSScreen*)screen;
+
     - (void) flipRect:(NSRect*)rect;
     - (NSPoint) flippedMouseLocation:(NSPoint)point;
 

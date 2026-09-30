@@ -263,6 +263,7 @@ struct macdrv_monitor
 };
 
 extern int macdrv_set_display_mode(CGDirectDisplayID id, CGDisplayModeRef display_mode);
+extern CGDisplayModeRef macdrv_copy_latent_display_mode(CGDirectDisplayID id);
 extern int macdrv_get_gpus(struct macdrv_gpu** gpus, int* count);
 extern void macdrv_free_gpus(struct macdrv_gpu* gpus);
 extern int macdrv_get_adapters(uint64_t gpu_id, struct macdrv_adapter** adapters, int* count);
