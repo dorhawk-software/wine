@@ -49,7 +49,11 @@ bool allow_software_rendering = false;
 bool allow_immovable_windows = true;
 bool use_confinement_cursor_clipping = true;
 bool cursor_clipping_locks_windows = true;
-bool use_precise_scrolling = true;
+/* Fractions of WHEEL_DELTA are valid Win32, but many games move a fixed step per wheel message and
+   become many times too sensitive; whole notches are the default, UsePreciseScrolling=Y opts in. */
+bool use_precise_scrolling = false;
+bool scroll_momentum = false;
+bool accelerate_scroll_wheel = false;
 int gl_surface_mode = GL_SURFACE_IN_FRONT_OPAQUE;
 bool retina_enabled = false;
 bool enable_app_nap = false;
@@ -271,6 +275,7 @@ static void setup_options(void)
     WCHAR buffer[MAX_PATH + 16], *p, *appname;
     HKEY hkey, appkey = 0;
     DWORD len;
+    const char *env_str;
 
     /* @@ Wine registry key: HKCU\Software\Wine\Mac Driver */
     hkey = open_hkcu_key("Software\\Wine\\Mac Driver");
@@ -345,6 +350,15 @@ static void setup_options(void)
 
     if (!get_config_key(hkey, appkey, "UsePreciseScrolling", buffer, sizeof(buffer)))
         use_precise_scrolling = IS_OPTION_TRUE(buffer[0]);
+    /* A launcher can choose per game. */
+    if ((env_str = getenv("HADRON_PRECISE_SCROLLING")))
+        use_precise_scrolling = IS_OPTION_TRUE(env_str[0]);
+
+    if (!get_config_key(hkey, appkey, "ScrollMomentum", buffer, sizeof(buffer)))
+        scroll_momentum = IS_OPTION_TRUE(buffer[0]);
+
+    if (!get_config_key(hkey, appkey, "AccelerateScrollWheel", buffer, sizeof(buffer)))
+        accelerate_scroll_wheel = IS_OPTION_TRUE(buffer[0]);
 
     if (!get_config_key(hkey, appkey, "OpenGLSurfaceMode", buffer, sizeof(buffer)))
     {

@@ -1678,10 +1678,18 @@ static NSString* WineLocalizedString(unsigned int stringID)
                 process = NSMouseInRect(nspoint, contentRect, NO);
             }
 
+            /* Momentum scrolling continues after the fingers leave a trackpad or Magic Mouse.
+               Windows wheels have no such thing, and applications, games especially, take the
+               extra events as more wheel turns. */
+            if (!scroll_momentum && [theEvent momentumPhase] != NSEventPhaseNone)
+                process = FALSE;
+
             if (process)
             {
                 macdrv_event* event;
                 double x, y;
+                double pixelsPerLine = 10;
+                CGEventSourceRef source;
                 BOOL continuous = FALSE;
 
                 pt = cgpoint_win_from_mac(pt);
@@ -1690,6 +1698,12 @@ static NSString* WineLocalizedString(unsigned int stringID)
                 event->mouse_scroll.x = floor(pt.x);
                 event->mouse_scroll.y = floor(pt.y);
                 event->mouse_scroll.time_ms = [self ticksForEventTime:[theEvent timestamp]];
+
+                if ((source = CGEventCreateSourceFromEvent(cgevent)))
+                {
+                    pixelsPerLine = CGEventSourceGetPixelsPerLine(source);
+                    CFRelease(source);
+                }
 
                 if (CGEventGetIntegerValueField(cgevent, kCGScrollWheelEventIsContinuous))
                 {
@@ -1704,16 +1718,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
                 }
                 else
                 {
-                    double pixelsPerLine = 10;
-                    CGEventSourceRef source;
-
                     /* The non-continuous values are in units of "lines", not pixels. */
-                    if ((source = CGEventCreateSourceFromEvent(cgevent)))
-                    {
-                        pixelsPerLine = CGEventSourceGetPixelsPerLine(source);
-                        CFRelease(source);
-                    }
-
                     x = pixelsPerLine * [theEvent deltaX];
                     y = pixelsPerLine * [theEvent deltaY];
                 }
@@ -1723,11 +1728,23 @@ static NSString* WineLocalizedString(unsigned int stringID)
                    So, negate the X scroll value to translate. */
                 x = -x;
 
-                /* The x,y values so far are in pixels.  Win32 expects to receive some
-                   fraction of WHEEL_DELTA == 120.  By my estimation, that's roughly
-                   6 times the pixel value. */
-                x *= 6;
-                y *= 6;
+                /* The x,y values so far are in pixels, already scaled by the user's macOS
+                   scrolling speed.  Win32 expects fractions of WHEEL_DELTA == 120, one wheel
+                   notch, which scrolls 3 lines (SPI_GETWHEELSCROLLLINES' default): scale so
+                   that a Windows application scrolls as far as a Mac one would. */
+                if (continuous || accelerate_scroll_wheel)
+                {
+                    x *= 120 / (3 * pixelsPerLine);
+                    y *= 120 / (3 * pixelsPerLine);
+                }
+                else
+                {
+                    /* A clicky wheel sends an event per detent, which macOS accelerates to
+                       several lines when the wheel turns fast.  Windows doesn't accelerate
+                       wheels: one detent is one notch, which is what games count. */
+                    x = x > 0 ? 120 : x < 0 ? -120 : 0;
+                    y = y > 0 ? 120 : y < 0 ? -120 : 0;
+                }
 
                 if (use_precise_scrolling)
                 {
