@@ -28,6 +28,7 @@ SOURCES = \
 	cocoa_window.m \
 	display.c \
 	dllmain.c \
+	egl.c \
 	event.c \
 	gdi.c \
 	image.c \

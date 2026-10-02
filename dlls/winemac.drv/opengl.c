@@ -2229,6 +2229,7 @@ UINT macdrv_OpenGLInit(UINT version, const struct opengl_funcs *opengl_funcs, co
         ERR("version mismatch, opengl32 wants %u but macdrv has %u\n", version, WINE_OPENGL_DRIVER_VERSION);
         return STATUS_INVALID_PARAMETER;
     }
+    if (macdrv_egl_wanted()) return macdrv_egl_init(opengl_funcs, driver_funcs);
     funcs = opengl_funcs;
 
     opengl_handle = dlopen("/System/Library/Frameworks/OpenGL.framework/OpenGL", RTLD_LAZY|RTLD_LOCAL|RTLD_NOLOAD);
