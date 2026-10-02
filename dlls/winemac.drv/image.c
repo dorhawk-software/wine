@@ -249,7 +249,7 @@ CFArrayRef create_app_icon_images(void)
 {
     struct dispatch_callback_params params = {.callback = app_icon_callback};
     CFMutableArrayRef images = NULL;
-    struct app_icon_entry *entries;
+    struct app_icon_entry *entries, *copy;
     ULONG ret_len;
     unsigned count;
     int i;
@@ -265,16 +265,22 @@ CFArrayRef create_app_icon_images(void)
     count = ret_len / sizeof(*entries);
     if (!count || !entries) return NULL;
 
+    /* The entries are on the user stack of the callback that returned them, and
+     * destroying an icon below calls back to user mode again, on that same stack. */
+    if (!(copy = malloc(ret_len))) return NULL;
+    memcpy(copy, entries, ret_len);
+
     images = CFArrayCreateMutable(NULL, count, &kCFTypeArrayCallBacks);
     if (!images)
     {
         WARN("failed to create images array\n");
+        free(copy);
         return NULL;
     }
 
     for (i = 0; i < count; i++)
     {
-        struct app_icon_entry *icon = &entries[i];
+        struct app_icon_entry *icon = &copy[i];
         CGImageRef cgimage = NULL;
         HICON handle = UlongToHandle(icon->icon);
         cgimage = create_cgimage_from_icon(handle, icon->width, icon->height);
@@ -286,6 +292,8 @@ CFArrayRef create_app_icon_images(void)
             CGImageRelease(cgimage);
         }
     }
+
+    free(copy);
 
     if (images && !CFArrayGetCount(images))
     {
