@@ -383,6 +383,7 @@ static void set_config_dir(void)
 static void init_paths(void)
 {
     Dl_info info;
+    const char *env;
 
     if (!dladdr( init_paths, &info ) || !(ntdll_dir = realpath_dirname( info.dli_fname )))
         fatal_error( "cannot get path to ntdll.so\n" );
@@ -399,6 +400,12 @@ static void init_paths(void)
         data_dir = build_relative_path( dll_dir, LIBDIR "/wine", DATADIR "/wine" );
         wineloader = build_path( ntdll_dir, "wine" );
     }
+
+    /* WINELOADER names the loader to start processes with: on macOS the Dock and the
+     * menu bar name an application after the path it was started from, so a launcher
+     * can point this at a link to the loader inside a bundle named after the program. */
+    if ((env = getenv( "WINELOADER" )) && env[0] == '/' && !access( env, X_OK ))
+        wineloader = strdup( env );
 
     set_dll_path();
     set_system_dll_path();
