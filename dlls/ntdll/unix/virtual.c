@@ -70,6 +70,7 @@
 # include <mach/task.h>
 # include <mach/thread_state.h>
 # include <mach/vm_map.h>
+# include <mach/vm_region.h>
 #undef host_page_size
 #endif
 
@@ -1571,6 +1572,52 @@ static struct wine_rb_entry *find_view_inside_range( void **base_ptr, void **end
 }
 
 
+#ifdef __APPLE__
+/* Wine's view tree does not contain mappings made by the host. After a fixed
+ * mapping collides, skip the occupied host region instead of trying every
+ * allocation-granularity address within it. The next attempt still uses a
+ * non-overwriting mapping, since host mappings can change after this query. */
+static void *next_mmap_candidate( void *start, size_t size, ptrdiff_t step )
+{
+    mach_vm_address_t address;
+    mach_vm_size_t region_size;
+    vm_region_submap_short_info_data_64_t info;
+    mach_msg_type_number_t count;
+    natural_t depth = 0;
+    kern_return_t ret;
+    ULONG_PTR mask, region_end;
+    unsigned int i;
+
+    for (i = 0; i < 32; i++)
+    {
+        address = (mach_vm_address_t)start;
+        count = VM_REGION_SUBMAP_SHORT_INFO_COUNT_64;
+        ret = mach_vm_region_recurse( mach_task_self(), &address, &region_size, &depth,
+                                     (vm_region_recurse_info_t)&info, &count );
+        if (ret || !info.is_submap) break;
+        depth++;
+    }
+    /* The conflicting mapping may have disappeared before the query. */
+    if (i == 32 || ret || address >= (ULONG_PTR)start + size ||
+        region_size <= (ULONG_PTR)start - min( address, (ULONG_PTR)start ))
+        return (char *)start + step;
+
+    if (step > 0)
+    {
+        mask = step - 1;
+        if (region_size > ~(ULONG_PTR)0 - address) return NULL;
+        region_end = address + region_size;
+        if (region_end > ~(ULONG_PTR)0 - mask) return NULL;
+        return (void *)((region_end + mask) & ~mask);
+    }
+
+    mask = -(step + 1);
+    if (address < size) return NULL;
+    return (void *)((address - size) & ~mask);
+}
+#endif
+
+
 /***********************************************************************
  *           try_map_free_area
  *
@@ -1594,7 +1641,11 @@ static void* try_map_free_area( void *base, void *end, ptrdiff_t step,
             (step < 0 && (char *)start - (char *)base < -step) ||
             step == 0)
             break;
+#ifdef __APPLE__
+        start = next_mmap_candidate( start, size, step );
+#else
         start = (char *)start + step;
+#endif
     }
 
     return NULL;
