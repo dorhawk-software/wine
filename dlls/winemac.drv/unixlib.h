@@ -23,6 +23,7 @@ enum macdrv_funcs
 {
     unix_init,
     unix_quit_result,
+    unix_overlay_active,
     unix_funcs_count
 };
 
@@ -47,6 +48,12 @@ struct init_params
 struct quit_result_params
 {
     int result;
+};
+
+/* macdrv_overlay_active params */
+struct overlay_active_params
+{
+    int active;
 };
 
 /* macdrv_app_icon result */

@@ -369,6 +369,35 @@ cleanup:
 }
 
 
+/* lsteamclient sets this event when Steam's overlay opens and resets it when it closes. */
+static DWORD WINAPI steam_overlay_thread(void *arg)
+{
+    struct overlay_active_params params;
+    HANDLE event = arg;
+
+    while (WaitForSingleObject(event, INFINITE) == WAIT_OBJECT_0)
+    {
+        params.active = TRUE;
+        MACDRV_CALL(overlay_active, &params);
+        /* Nothing can wait for an event to be reset, so this looks while the overlay is open. */
+        while (WaitForSingleObject(event, 0) == WAIT_OBJECT_0) Sleep(20);
+        params.active = FALSE;
+        MACDRV_CALL(overlay_active, &params);
+    }
+    return 0;
+}
+
+/* Only a game started by Steam has an overlay; SteamGameId is what Steam's own libraries go by. */
+static void watch_steam_overlay(void)
+{
+    HANDLE event, thread;
+
+    if (!GetEnvironmentVariableW(L"SteamGameId", NULL, 0)) return;
+    if (!(event = CreateEventA(NULL, TRUE, FALSE, "__wine_steamclient_GameOverlayActivated"))) return;
+    if ((thread = CreateThread(NULL, 0, steam_overlay_thread, event, 0, NULL))) CloseHandle(thread);
+    else CloseHandle(event);
+}
+
 static BOOL process_attach(void)
 {
     struct init_params params;
@@ -402,6 +431,7 @@ static BOOL process_attach(void)
 
     if (MACDRV_CALL(init, &params)) return FALSE;
 
+    watch_steam_overlay();
     return TRUE;
 }
 

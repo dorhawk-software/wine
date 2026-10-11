@@ -31,6 +31,13 @@ WINE_DEFAULT_DEBUG_CHANNEL(cursor);
 
 
 static pthread_mutex_t cursor_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* Steam's overlay has the mouse and the keyboard while it is open: the application's input stops
+ * and its hold on the cursor is suspended. */
+static pthread_mutex_t overlay_mutex = PTHREAD_MUTEX_INITIALIZER;
+static LONG overlay_active;
+static BOOL cursor_clipped;     /* the application's clipping rectangle, kept while it is suspended */
+static CGRect cursor_clip_rect;
 static CFMutableDictionaryRef cursor_cache;
 
 
@@ -640,6 +647,7 @@ void macdrv_DestroyCursorIcon(HCURSOR cursor)
 BOOL macdrv_ClipCursor(const RECT *clip, BOOL reset)
 {
     CGRect rect;
+    BOOL ret;
 
     TRACE("%s %u\n", wine_dbgstr_rect(clip), reset);
 
@@ -654,7 +662,59 @@ BOOL macdrv_ClipCursor(const RECT *clip, BOOL reset)
     /* FIXME: This needs to be done not just in this process but in all of the
        ones for this WINEPREFIX.  Broadcast a message to do that. */
 
-    return macdrv_clip_cursor(rect);
+    pthread_mutex_lock(&overlay_mutex);
+    cursor_clipped = !CGRectIsInfinite(rect);
+    cursor_clip_rect = rect;
+    ret = overlay_active || macdrv_clip_cursor(rect);
+    pthread_mutex_unlock(&overlay_mutex);
+    return ret;
+}
+
+
+/***********************************************************************
+ *              macdrv_overlay_is_active
+ */
+bool macdrv_overlay_is_active(void)
+{
+    return ReadNoFence(&overlay_active) != 0;
+}
+
+
+/***********************************************************************
+ *              macdrv_set_overlay_active
+ *
+ * Steam's overlay opened or closed.  While it is open the cursor is free
+ * and the application keeps the position it last knew; its clipping
+ * rectangle comes back when the overlay closes.
+ */
+void macdrv_set_overlay_active(bool active)
+{
+    static const struct { WORD vkey; UINT up; DWORD data; } buttons[] =
+    {
+        { VK_LBUTTON,  MOUSEEVENTF_LEFTUP,   0 },
+        { VK_RBUTTON,  MOUSEEVENTF_RIGHTUP,  0 },
+        { VK_MBUTTON,  MOUSEEVENTF_MIDDLEUP, 0 },
+        { VK_XBUTTON1, MOUSEEVENTF_XUP,      XBUTTON1 },
+        { VK_XBUTTON2, MOUSEEVENTF_XUP,      XBUTTON2 },
+    };
+    unsigned int i;
+
+    TRACE("active %d\n", active);
+
+    pthread_mutex_lock(&overlay_mutex);
+    if (!overlay_active == active)
+    {
+        WriteNoFence(&overlay_active, active);
+        if (cursor_clipped) macdrv_clip_cursor(active ? CGRectInfinite : cursor_clip_rect);
+    }
+    pthread_mutex_unlock(&overlay_mutex);
+
+    /* Button releases stop with the rest of the mouse's input, so nothing may stay held. */
+    for (i = 0; active && i < ARRAY_SIZE(buttons); i++)
+    {
+        if (NtUserGetAsyncKeyState(buttons[i].vkey) & 0x8000)
+            send_mouse_input(NULL, NULL, buttons[i].up, 0, 0, buttons[i].data, FALSE, NtGetTickCount());
+    }
 }
 
 
@@ -665,6 +725,9 @@ BOOL macdrv_GetCursorPos(LPPOINT pos)
 {
     CGPoint pt;
     BOOL ret;
+
+    /* The cursor is the overlay's: the application sees it where it last put or saw it. */
+    if (macdrv_overlay_is_active()) return TRUE;
 
     ret = macdrv_get_cursor_position(&pt);
     if (ret)
@@ -814,7 +877,11 @@ done:
  */
 BOOL macdrv_SetCursorPos(INT x, INT y)
 {
-    BOOL ret = macdrv_set_cursor_position(CGPointMake(x, y));
+    BOOL ret;
+
+    if (macdrv_overlay_is_active()) return TRUE;
+
+    ret = macdrv_set_cursor_position(CGPointMake(x, y));
     if (ret)
         TRACE("warped to %d,%d\n", x, y);
     else

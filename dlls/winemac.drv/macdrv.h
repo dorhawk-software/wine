@@ -283,6 +283,8 @@ extern bool query_min_max_info(HWND hwnd);
 extern void macdrv_mouse_button(HWND hwnd, const macdrv_event *event);
 extern void macdrv_mouse_moved(HWND hwnd, const macdrv_event *event);
 extern void macdrv_mouse_scroll(HWND hwnd, const macdrv_event *event);
+extern void macdrv_set_overlay_active(bool active);
+extern bool macdrv_overlay_is_active(void);
 extern void macdrv_release_capture(HWND hwnd, const macdrv_event *event);
 
 extern void macdrv_compute_keyboard_layout(struct macdrv_thread_data *thread_data);

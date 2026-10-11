@@ -367,6 +367,29 @@ static void macdrv_query_event(HWND hwnd, const macdrv_event *event)
 /***********************************************************************
  *              macdrv_handle_event
  */
+/***********************************************************************
+ *              input_goes_to_overlay
+ *
+ * Whether an event is input that Steam's overlay has taken from the
+ * application.  Key releases still pass, so that a key held when the
+ * overlay opened does not stay down.
+ */
+static BOOL input_goes_to_overlay(const macdrv_event *event)
+{
+    switch (event->type)
+    {
+    case KEY_PRESS:
+    case MOUSE_BUTTON:
+    case MOUSE_MOVED_RELATIVE:
+    case MOUSE_MOVED_ABSOLUTE:
+    case MOUSE_SCROLL:
+        return macdrv_overlay_is_active();
+    default:
+        return FALSE;
+    }
+}
+
+
 void macdrv_handle_event(const macdrv_event *event)
 {
     HWND hwnd = macdrv_get_window_hwnd(event->window);
@@ -375,6 +398,8 @@ void macdrv_handle_event(const macdrv_event *event)
 
     TRACE("%s for hwnd/window %p/%p\n", dbgstr_event(event->type), hwnd,
           event->window);
+
+    if (input_goes_to_overlay(event)) return;
 
     prev = thread_data->current_event;
     thread_data->current_event = event;

@@ -607,10 +607,19 @@ static NTSTATUS macdrv_quit_result(void *arg)
 }
 
 
+static NTSTATUS macdrv_overlay_active(void *arg)
+{
+    struct overlay_active_params *params = arg;
+    macdrv_set_overlay_active(params->active);
+    return 0;
+}
+
+
 const unixlib_entry_t __wine_unix_call_funcs[] =
 {
     macdrv_init,
     macdrv_quit_result,
+    macdrv_overlay_active,
 };
 
 C_ASSERT( ARRAYSIZE(__wine_unix_call_funcs) == unix_funcs_count );
@@ -637,6 +646,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
 {
     wow64_init,
     macdrv_quit_result,
+    macdrv_overlay_active,
 };
 
 C_ASSERT( ARRAYSIZE(__wine_unix_call_wow64_funcs) == unix_funcs_count );
