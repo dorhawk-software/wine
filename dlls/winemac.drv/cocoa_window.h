@@ -35,6 +35,7 @@
     BOOL maximized;
     BOOL fullscreen;
     BOOL pendingMinimize;
+    BOOL minimizeAwaitingStart;
     BOOL pendingOrderOut;
     BOOL savedVisibleState;
     BOOL drawnSinceShown;
@@ -85,6 +86,7 @@
 
 @property (retain, readonly, nonatomic) WineEventQueue* queue;
 @property (readonly, nonatomic) BOOL disabled;
+@property (readonly, nonatomic) BOOL minimizeAwaitingStart;
 @property (readonly, nonatomic) BOOL noForeground;
 @property (readonly, nonatomic) BOOL preventsAppActivation;
 @property (readonly, nonatomic) BOOL floating;

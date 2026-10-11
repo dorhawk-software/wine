@@ -933,6 +933,7 @@ static inline BOOL stage_manager_enabled(void)
 
     @synthesize disabled, noForeground, preventsAppActivation, floating, fullscreen, fakingClose, closing, latentParentWindow, hwnd, queue;
     @synthesize drawnSinceShown;
+    @synthesize minimizeAwaitingStart;
     @synthesize shapeChangedSinceLastDraw;
     @synthesize usePerPixelAlpha;
     @synthesize himc, commandDone;
@@ -1098,6 +1099,12 @@ static inline BOOL stage_manager_enabled(void)
         }
     }
 
+    - (void) requestNativeMinimize
+    {
+        minimizeAwaitingStart = TRUE;
+        [super miniaturize:nil];
+    }
+
     - (void) setWindowFeatures:(const struct macdrv_window_features*)wf
     {
         static const NSUInteger usedStyles = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
@@ -1258,6 +1265,8 @@ static inline BOOL stage_manager_enabled(void)
         {
             macdrv_event_mask discard = event_mask_for_type(WINDOW_DID_UNMINIMIZE);
 
+            if (!state->minimized)
+                minimizeAwaitingStart = FALSE;
             pendingMinimize = FALSE;
             if (state->minimized && ![self isMiniaturized])
             {
@@ -1281,7 +1290,7 @@ static inline BOOL stage_manager_enabled(void)
                     else
                     {
                         [self setStyleMask:([self styleMask] | NSWindowStyleMaskMiniaturizable)];
-                        [super miniaturize:nil];
+                        [self requestNativeMinimize];
                         discard |= event_mask_for_type(WINDOW_BROUGHT_FORWARD) |
                                    event_mask_for_type(WINDOW_GOT_FOCUS) |
                                    event_mask_for_type(WINDOW_LOST_FOCUS);
@@ -1749,7 +1758,7 @@ static inline BOOL stage_manager_enabled(void)
             if (pendingMinimize)
             {
                 [self setStyleMask:([self styleMask] | NSWindowStyleMaskMiniaturizable)];
-                [super miniaturize:nil];
+                [self requestNativeMinimize];
                 pendingMinimize = FALSE;
             }
 
@@ -2749,6 +2758,7 @@ static inline BOOL stage_manager_enabled(void)
     {
         WineApplicationController* controller = [WineApplicationController sharedController];
 
+        minimizeAwaitingStart = FALSE;
         if (!ignore_windowDeminiaturize)
             [self postDidUnminimizeEvent];
         ignore_windowDeminiaturize = FALSE;
@@ -2820,6 +2830,7 @@ static inline BOOL stage_manager_enabled(void)
     {
         macdrv_event* event;
 
+        minimizeAwaitingStart = FALSE;
         if (fullscreen && [self isOnActiveSpace])
             [[WineApplicationController sharedController] updateFullscreenWindows];
 
@@ -2940,6 +2951,7 @@ static inline BOOL stage_manager_enabled(void)
 
     - (void)windowWillMiniaturize:(NSNotification *)notification
     {
+        minimizeAwaitingStart = FALSE;
         [self becameIneligibleParentOrChild];
         [self grabDockIconSnapshotFromWindow:nil force:NO];
     }

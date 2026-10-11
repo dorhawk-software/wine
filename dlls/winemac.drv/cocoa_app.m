@@ -638,23 +638,28 @@ static NSString* WineLocalizedString(unsigned int stringID)
             {
                 [window setLevel:newLevel];
 
-                if (origLevel < newLevel)
+                /* Ordering the window before native minimization starts can
+                 * cancel the request. Adjust its level without ordering it in. */
+                if (active || !window.minimizeAwaitingStart)
                 {
-                    // If we increased the level, the window should be toward the
-                    // back of its new level (but still ahead of the previous
-                    // windows we did this to).
-                    if (prev)
-                        [window orderWindow:NSWindowAbove relativeTo:[prev windowNumber]];
+                    if (origLevel < newLevel)
+                    {
+                        // If we increased the level, the window should be toward the
+                        // back of its new level (but still ahead of the previous
+                        // windows we did this to).
+                        if (prev)
+                            [window orderWindow:NSWindowAbove relativeTo:[prev windowNumber]];
+                        else
+                            [window orderBack:nil];
+                    }
                     else
-                        [window orderBack:nil];
-                }
-                else
-                {
-                    // If we decreased the level, we want the window at the top
-                    // of its new level. -setLevel: is documented to do that on
-                    // its own, but that's buggy on Ventura. Since we're looping
-                    // back-to-front here, -orderFront: will do the right thing.
-                    [window orderFront:nil];
+                    {
+                        // If we decreased the level, we want the window at the top
+                        // of its new level. -setLevel: is documented to do that on
+                        // its own, but that's buggy on Ventura. Since we're looping
+                        // back-to-front here, -orderFront: will do the right thing.
+                        [window orderFront:nil];
+                    }
                 }
             }
 
