@@ -618,7 +618,9 @@ static NSString* WineLocalizedString(unsigned int stringID)
             NSInteger origLevel = [window level];
             NSInteger newLevel = [window minimumLevelForActive:active];
 
-            if (window.floating)
+            /* The inactive floating policy can give fullscreen windows a normal
+             * minimum. Do not raise them again with the floating window floor. */
+            if (window.floating && newLevel > NSNormalWindowLevel)
             {
                 if (minFloatingLevel <= maxNonfloatingLevel)
                     minFloatingLevel = maxNonfloatingLevel + 1;
