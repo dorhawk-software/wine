@@ -53,9 +53,20 @@ static BOOL macdrv_egl_surface_create(struct client_surface *client, int format,
 {
     struct macdrv_client_surface *surface = impl_from_client_surface(client);
     EGLConfig config = egl->configs[(format - 1) % egl->config_count];
+    EGLint attribs[4], *attrib = attribs;
     struct opengl_drawable *gl;
 
     TRACE("client %s, format %d\n", debugstr_client_surface(client), format);
+
+    /* A window is opaque whatever its pixel format's alpha holds, as on Windows. */
+    if (!egl->extensions[EGL_EXT_present_opaque])
+        WARN("Missing EGL_EXT_present_opaque extension\n");
+    else
+    {
+        *attrib++ = EGL_PRESENT_OPAQUE_EXT;
+        *attrib++ = EGL_TRUE;
+    }
+    *attrib++ = EGL_NONE;
 
     if (!macdrv_client_surface_acquire_metal_swapchain(surface)) return FALSE;
     if (!(gl = opengl_drawable_create(&macdrv_egl_surface_funcs, format, client, NULL))) return FALSE;
@@ -65,7 +76,7 @@ static BOOL macdrv_egl_surface_create(struct client_surface *client, int format,
     opengl_drawable_map_buffer(gl, GL_FRONT_AND_BACK, GL_BACK);
 
     gl->surface = funcs->p_eglCreateWindowSurface(egl->display, config,
-            (EGLNativeWindowType)macdrv_swapchain_get_layer(surface->metal_swapchain), NULL);
+            (EGLNativeWindowType)macdrv_swapchain_get_layer(surface->metal_swapchain), attribs);
     if (!gl->surface)
     {
         ERR("Failed to create an EGL surface for %s, error %#x\n", debugstr_client_surface(client),
