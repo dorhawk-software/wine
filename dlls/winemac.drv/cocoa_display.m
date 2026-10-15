@@ -857,10 +857,16 @@ static CFDataRef generate_edid(CGDirectDisplayID display_id, uint32_t vendor_num
         timings++;
     }
 
-    /* display product name */
+    /* display product name: up to 13 characters, ended by a line feed and padded with spaces */
     p[3] = 0xfc;
-    strcpy((char *)p + 5, "Wine Monitor");
-    p[17] = 0x0a;
+    {
+        const char *name = CGDisplayIsBuiltin(display_id) ? "Built-in" : "Wine Monitor";
+        size_t len = strlen(name);
+
+        memcpy(p + 5, name, len);
+        p[5 + len] = 0x0a;
+        memset(p + 6 + len, ' ', 12 - len);
+    }
 
     /* checksum */
     sum = 0;
