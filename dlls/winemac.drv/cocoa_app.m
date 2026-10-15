@@ -823,9 +823,59 @@ static NSString* WineLocalizedString(unsigned int stringID)
         return CGDisplayIsCaptured(displayID) || CGDisplayCapture(displayID) == CGDisplayNoErr;
     }
 
+    // Where each active display's top-left corner is, in Win32 (CG) coordinates.
+    - (NSDictionary*) displayOrigins
+    {
+        CGDirectDisplayID ids[32];
+        uint32_t count, i;
+        NSMutableDictionary* origins = [NSMutableDictionary dictionary];
+
+        if (CGGetActiveDisplayList(32, ids, &count) == kCGErrorSuccess)
+        {
+            for (i = 0; i < count; i++)
+            {
+                CGRect bounds = CGDisplayBounds(ids[i]);
+                origins[@(ids[i])] = [NSValue valueWithPoint:NSMakePoint(bounds.origin.x, bounds.origin.y)];
+            }
+        }
+        return origins;
+    }
+
+    // A mode change can move a display other than the main one: macOS moves a display that would
+    // overlap another, and moves it back when the mode is restored. A window placed at a display's
+    // top-left corner, as a fullscreen window is, goes with it, as it stays on its monitor on
+    // Windows.
+    - (void) moveWindowsWithDisplaysFrom:(NSDictionary*)before
+    {
+        NSDictionary* after = [self displayOrigins];
+
+        for (NSNumber* displayID in before)
+        {
+            NSPoint from = [before[displayID] pointValue], to;
+
+            if (!after[displayID]) continue;
+            to = [after[displayID] pointValue];
+            if (NSEqualPoints(from, to)) continue;
+
+            for (NSWindow* window in [NSApp windows])
+            {
+                NSRect frame;
+
+                if (![window isKindOfClass:[WineWindow class]] || [window isMiniaturized]) continue;
+                frame = [window frame];
+                [self flipRect:&frame];
+                if (fabs(frame.origin.x - from.x) >= 0.5 || fabs(frame.origin.y - from.y) >= 0.5) continue;
+                frame.origin = to;
+                [self flipRect:&frame];
+                [window setFrameOrigin:frame.origin];
+            }
+        }
+    }
+
     - (BOOL) setMode:(CGDisplayModeRef)mode forDisplay:(CGDirectDisplayID)displayID
     {
         BOOL ret = FALSE;
+        NSDictionary* origins = [self displayOrigins];
         NSNumber* displayIDKey = [NSNumber numberWithUnsignedInt:displayID];
         CGDisplayModeRef originalMode;
 
@@ -931,7 +981,10 @@ static NSString* WineLocalizedString(unsigned int stringID)
         }
 
         if (ret)
+        {
+            [self moveWindowsWithDisplaysFrom:origins];
             [self adjustWindowLevels];
+        }
 
         return ret;
     }
@@ -1137,6 +1190,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
 
             if ([originalDisplayModes count] || displaysCapturedForFullscreen)
             {
+                NSDictionary* origins = [self displayOrigins];
                 NSNumber* displayID;
                 for (displayID in originalDisplayModes)
                 {
@@ -1149,6 +1203,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
                 CGReleaseAllDisplays();
                 [originalDisplayModes removeAllObjects];
                 displaysCapturedForFullscreen = FALSE;
+                [self moveWindowsWithDisplaysFrom:origins];
             }
 
             for (app in [[NSWorkspace sharedWorkspace] runningApplications])
