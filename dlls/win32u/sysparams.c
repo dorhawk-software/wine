@@ -165,7 +165,13 @@ static INT64 last_query_display_time;
 static UINT64 monitor_update_serial;
 static pthread_mutex_t display_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* On macOS a real mode change captures the display, can rearrange the displays and
+ * drops back on every switch to another app; emulate it unless EmulateModeset says not to. */
+#ifdef __APPLE__
+BOOL emulate_modeset = TRUE;
+#else
 BOOL emulate_modeset = FALSE;
+#endif
 BOOL decorated_mode = TRUE;
 UINT64 thunk_lock_callback = 0;
 
