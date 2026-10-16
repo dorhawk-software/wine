@@ -3509,19 +3509,33 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
         if ((sec[i].Characteristics & IMAGE_SCN_MEM_SHARED) &&
             (sec[i].Characteristics & IMAGE_SCN_MEM_WRITE))
         {
+            char *addr = ptr + sec[i].VirtualAddress;
+            unsigned int shared_vprot = VPROT_COMMITTED | VPROT_READ | VPROT_WRITE;
+
             TRACE_(module)( "%s mapping shared section %.8s at %p off %x (%x) size %lx (%lx) flags %x\n",
-                            debugstr_us(nt_name), sec[i].Name, ptr + sec[i].VirtualAddress,
+                            debugstr_us(nt_name), sec[i].Name, addr,
                             sec[i].PointerToRawData, (int)pos, file_size, map_size,
                             sec[i].Characteristics );
+            /* A shared mapping needs whole host pages. With host pages larger than the image's
+             * pages, a section sharing its host pages with others can only get a private copy:
+             * correct for one process, but not shared with other instances of the image. */
+            if (((UINT_PTR)addr & host_page_mask) || (pos & host_page_mask) ||
+                ((map_size & host_page_mask) && addr + map_size < (char *)view->base + view->size))
+            {
+                FIXME_(module)( "%s shared section %.8s is not host page aligned, mapping a private copy\n",
+                                debugstr_us(nt_name), sec[i].Name );
+                shared_vprot = VPROT_COMMITTED | VPROT_READ | VPROT_WRITECOPY;
+            }
             if (map_file_into_view( view, shared_fd, sec[i].VirtualAddress, map_size, pos,
-                                    VPROT_COMMITTED | VPROT_READ | VPROT_WRITE, FALSE ) != STATUS_SUCCESS)
+                                    shared_vprot, FALSE ) != STATUS_SUCCESS)
             {
                 ERR_(module)( "Could not map %s shared section %.8s\n", debugstr_us(nt_name), sec[i].Name );
                 goto done;
             }
 
-            /* check if the import directory falls inside this section */
-            if (imports && imports->VirtualAddress >= sec[i].VirtualAddress &&
+            /* check if the import directory falls inside this section; a private copy needs no
+             * private remapping of it */
+            if ((shared_vprot & VPROT_WRITE) && imports && imports->VirtualAddress >= sec[i].VirtualAddress &&
                 imports->VirtualAddress < sec[i].VirtualAddress + map_size)
             {
                 UINT_PTR base = imports->VirtualAddress & ~host_page_mask;
