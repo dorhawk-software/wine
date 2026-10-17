@@ -55,7 +55,8 @@ bool use_precise_scrolling = false;
 bool scroll_momentum = false;
 bool accelerate_scroll_wheel = false;
 int gl_surface_mode = GL_SURFACE_IN_FRONT_OPAQUE;
-bool retina_enabled = false;
+/* Games get the display's pixels, as on Windows; RetinaMode=n in the registry gives points. */
+bool retina_enabled = true;
 bool enable_app_nap = false;
 
 pthread_key_t macdrv_thread_data_key = 0;
