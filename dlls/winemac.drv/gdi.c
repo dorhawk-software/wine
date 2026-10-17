@@ -216,10 +216,7 @@ static INT macdrv_GetDeviceCaps(PHYSDEV dev, INT cap)
     default:
         pthread_mutex_unlock(&device_data_mutex);
         dev = GET_NEXT_PHYSDEV( dev, pGetDeviceCaps );
-        ret = dev->funcs->pGetDeviceCaps( dev, cap );
-        if ((cap == HORZRES || cap == VERTRES) && retina_on)
-            ret *= 2;
-        return ret;
+        return dev->funcs->pGetDeviceCaps( dev, cap );
     }
 
     TRACE("cap %d -> %d\n", cap, ret);
