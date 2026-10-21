@@ -3197,7 +3197,9 @@ BOOL is_emulated_code( ULONG_PTR ptr )
 static void alloc_arm64ec_map(void)
 {
     unsigned int status;
-    SIZE_T size = ((ULONG_PTR)address_space_limit + page_size) >> (page_shift + 3);  /* one bit per page */
+    /* one bit per page of the 47-bit user address space, whatever the host's limit, so that
+     * RtlIsEcCode only has to check that an address is below 1 << 47 */
+    SIZE_T size = ((ULONG_PTR)1 << 47) >> (page_shift + 3);
 
     size = ROUND_SIZE( 0, size, host_page_mask );
     status = map_view( &arm64ec_view, NULL, size, MEM_TOP_DOWN, VPROT_READ | VPROT_COMMITTED, 0, 0, 0 );

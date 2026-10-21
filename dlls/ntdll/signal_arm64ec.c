@@ -1394,6 +1394,9 @@ BOOLEAN WINAPI RtlIsEcCode( ULONG_PTR ptr )
 {
     const UINT64 *map = (const UINT64 *)NtCurrentTeb()->Peb->EcCodeBitMap;
     ULONG_PTR page = ptr / page_size;
+
+    /* the map covers the 47-bit user address space; an unwinder can ask about any value */
+    if (ptr >> 47) return FALSE;
     return (map[page / 64] >> (page & 63)) & 1;
 }
 
