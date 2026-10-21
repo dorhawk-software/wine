@@ -2524,6 +2524,26 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
         if (limit_low && (void *)limit_low > start) start = (void *)limit_low;
         if (limit_high && (void *)limit_high < end) end = (char *)limit_high + 1;
 
+#ifdef _WIN64
+        /* Windows gives a top-down allocation the highest free address, so it only goes below
+         * 4GB when nothing above is free. Don't let one that does not fit the top-down area
+         * fall into the low reserved area while there is room above 4GB: programs that need
+         * 32-bit addresses depend on that space. */
+        if (top_down && start < (void *)limit_4g && end > (void *)limit_4g)
+        {
+            if ((ptr = map_reserved_area( (void *)limit_4g, end, host_size, top_down, unix_prot, align_mask )))
+            {
+                TRACE( "got mem in reserved area %p-%p\n", ptr, (char *)ptr + size );
+                goto done;
+            }
+            if ((ptr = map_free_area( (void *)limit_4g, end, host_size, top_down, unix_prot, align_mask )))
+            {
+                TRACE( "got mem with map_free_area %p-%p\n", ptr, (char *)ptr + size );
+                goto done;
+            }
+        }
+#endif
+
         if ((ptr = map_reserved_area( start, end, host_size, top_down, unix_prot, align_mask )))
         {
             TRACE( "got mem in reserved area %p-%p\n", ptr, (char *)ptr + size );
