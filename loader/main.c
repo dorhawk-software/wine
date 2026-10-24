@@ -199,6 +199,74 @@ static void *try_dlopen( const char *argv0 )
 }
 
 
+#if defined(__APPLE__) && defined(__aarch64__)
+
+static int file_exists( const char *dir, const char *name )
+{
+    char *path = build_path( dir, name );
+    int ret = !access( path, F_OK );
+
+    free( path );
+    return ret;
+}
+
+static void set_default( const char *name, const char *dir, const char *value )
+{
+    char *path;
+
+    if (getenv( name )) return;
+    path = dir ? build_path( dir, value ) : strdup( value );
+    setenv( name, path, 0 );
+    free( path );
+}
+
+/* Hadron's runtime keeps its renderers next to Wine: Mesa's Zink in dist/mesa-zink, KosmicKrisp in
+ * dist/mesa, and the libraries Wine opens by name in dist/ext/lib (Homebrew's in a checkout).
+ * scripts/play names them in the environment. A loader started without it, e.g. as dist/bin/wine,
+ * names them itself, so that OpenGL is Zink and Vulkan is KosmicKrisp there too instead of
+ * Apple's OpenGL 4.1 and no Vulkan. dyld reads its library path when a process starts, so the
+ * loader then starts again. Settings already in the environment are kept. */
+static void set_runtime_defaults( const char *exe, char *argv[] )
+{
+    char *dir, *dist, *libs, *libpath, *old;
+    size_t len;
+
+    if (getenv( "WINE_MAC_OPENGL" ) || !exe) return;
+    if (!(dir = realpath_dirname( exe ))) return;
+    if (!(dist = remove_tail( dir, "/lib/wine/aarch64-unix/wine.app/Contents/MacOS" )) ||
+        !file_exists( dist, "mesa-zink/lib/libEGL.1.dylib" ))
+    {
+        free( dist );
+        free( dir );
+        return;
+    }
+
+    setenv( "WINE_MAC_OPENGL", "egl", 1 );
+    set_default( "MESA_LOADER_DRIVER_OVERRIDE", NULL, "zink" );
+    set_default( "DRIRC_CONFIGDIR", dist, "mesa-zink/share/drirc.d" );
+    if (file_exists( dist, "mesa/share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json" ))
+    {
+        set_default( "VK_DRIVER_FILES", dist, "mesa/share/vulkan/icd.d/kosmickrisp_mesa_icd.aarch64.json" );
+        set_default( "MESA_KK_EXPERIMENTAL", NULL, "dgc,xfb,sparse" );
+    }
+
+    /* Zink's libEGL first, then the runtime's libraries, then whatever was there */
+    libs = file_exists( dist, "ext/lib" ) ? build_path( dist, "ext/lib" ) : strdup( "/opt/homebrew/lib" );
+    old = getenv( "DYLD_FALLBACK_LIBRARY_PATH" );
+    len = strlen( dist ) + strlen( libs ) + (old ? strlen( old ) : 0) + 32;
+    libpath = malloc( len );
+    snprintf( libpath, len, "%s/mesa-zink/lib:%s%s%s", dist, libs, old ? ":" : "", old ? old : "" );
+    setenv( "DYLD_FALLBACK_LIBRARY_PATH", libpath, 1 );
+
+    free( libpath );
+    free( libs );
+    free( dist );
+    free( dir );
+    execv( exe, argv );  /* on failure, go on without the library path */
+}
+
+#endif
+
 /**********************************************************************
  *           main
  */
@@ -206,6 +274,9 @@ int main( int argc, char *argv[] )
 {
     void *handle;
 
+#if defined(__APPLE__) && defined(__aarch64__)
+    set_runtime_defaults( get_self_exe(), argv );
+#endif
     init_reserved_areas();
 
     if ((handle = try_dlopen( get_self_exe() )) ||
