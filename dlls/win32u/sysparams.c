@@ -323,12 +323,52 @@ static UINT gcd( UINT a, UINT b )
     }
 }
 
+/* the closest fraction to num / den whose terms fit in a struct ratio: the exact one if it fits,
+ * else the closer of the last convergent and the largest semiconvergent of its continued fraction
+ * that fit, e.g. for a 1025 pixel wide mode on a 3024 pixel wide screen at 96 dpi */
 static struct ratio make_ratio( UINT num, UINT den )
 {
+    UINT64 n, m, a = 0, t, k, p0 = 0, q0 = 1, p1 = 1, q1 = 0, ps, qs;
     UINT d = gcd( num, den );
-    struct ratio r = { num / d, den / d };
-    assert( num / d < 65536 );
-    assert( den / d < 65536 );
+    struct ratio r;
+    double x, err_c, err_s;
+
+    n = num / d;
+    m = den / d;
+    if (n <= 0xffff && m <= 0xffff)
+    {
+        r.num = n;
+        r.den = m;
+        return r;
+    }
+
+    while (m)
+    {
+        a = n / m;
+        if (a * p1 + p0 > 0xffff || a * q1 + q0 > 0xffff) break;
+        t = a * p1 + p0; p0 = p1; p1 = t;
+        t = a * q1 + q0; q0 = q1; q1 = t;
+        t = n % m; n = m; m = t;
+    }
+
+    k = (0xffff - p0) / p1;
+    if (q1 && (0xffff - q0) / q1 < k) k = (0xffff - q0) / q1;
+    ps = k * p1 + p0;
+    qs = k * q1 + q0;
+    if (!q1)  /* num / den is above 0xffff */
+    {
+        r.num = ps;
+        r.den = qs;
+        return r;
+    }
+
+    x = (double)num / den;
+    err_c = x - (double)p1 / q1;
+    err_s = k ? x - (double)ps / qs : err_c;
+    if (err_c < 0) err_c = -err_c;
+    if (err_s < 0) err_s = -err_s;
+    r.num = err_s < err_c ? ps : p1;
+    r.den = err_s < err_c ? qs : q1;
     return r;
 }
 
