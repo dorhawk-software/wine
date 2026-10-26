@@ -131,7 +131,7 @@ static const CFStringRef cocoa_cursor_names[] =
  * Update the various window states on a mouse event.
  */
 static void send_mouse_input(HWND hwnd, WineWindow *cocoa_window, UINT flags, int x, int y,
-                             DWORD mouse_data, BOOL drag, unsigned long time)
+                             DWORD mouse_data, BOOL drag, unsigned long time, const struct raw_mouse *raw)
 {
     INPUT input;
 
@@ -143,7 +143,8 @@ static void send_mouse_input(HWND hwnd, WineWindow *cocoa_window, UINT flags, in
     input.mi.time           = time;
     input.mi.dwExtraInfo    = 0;
 
-    NtUserSendHardwareInput(hwnd, 0, &input, 0);
+    /* raw input gets the movement in raw, and none from the cursor's position */
+    NtUserSendHardwareInput(hwnd, SEND_HWMSG_RAWINPUT, &input, (LPARAM)raw);
 }
 
 
@@ -713,7 +714,7 @@ void macdrv_set_overlay_active(bool active)
     for (i = 0; active && i < ARRAY_SIZE(buttons); i++)
     {
         if (NtUserGetAsyncKeyState(buttons[i].vkey) & 0x8000)
-            send_mouse_input(NULL, NULL, buttons[i].up, 0, 0, buttons[i].data, FALSE, NtGetTickCount());
+            send_mouse_input(NULL, NULL, buttons[i].up, 0, 0, buttons[i].data, FALSE, NtGetTickCount(), NULL);
     }
 }
 
@@ -934,7 +935,7 @@ void macdrv_mouse_button(HWND hwnd, const macdrv_event *event)
 
     send_mouse_input(hwnd, event->window, flags | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE,
                      event->mouse_button.x, event->mouse_button.y,
-                     data, FALSE, event->mouse_button.time_ms);
+                     data, FALSE, event->mouse_button.time_ms, NULL);
 }
 
 
@@ -946,17 +947,25 @@ void macdrv_mouse_button(HWND hwnd, const macdrv_event *event)
 void macdrv_mouse_moved(HWND hwnd, const macdrv_event *event)
 {
     UINT flags = MOUSEEVENTF_MOVE;
+    struct raw_mouse raw = {0};
 
-    TRACE("win %p/%p %s (%d,%d) drag %d time %lu (%lu ticks ago)\n", hwnd, event->window,
+    TRACE("win %p/%p %s (%d,%d) raw (%d,%d) drag %d time %lu (%lu ticks ago)\n", hwnd, event->window,
           (event->type == MOUSE_MOVED_RELATIVE) ? "relative" : "absolute",
-          event->mouse_moved.x, event->mouse_moved.y, event->mouse_moved.drag,
-          event->mouse_moved.time_ms, (NtGetTickCount() - event->mouse_moved.time_ms));
+          event->mouse_moved.x, event->mouse_moved.y, event->mouse_moved.raw_x, event->mouse_moved.raw_y,
+          event->mouse_moved.drag, event->mouse_moved.time_ms, (NtGetTickCount() - event->mouse_moved.time_ms));
 
     if (event->type == MOUSE_MOVED_ABSOLUTE)
         flags |= MOUSEEVENTF_ABSOLUTE;
 
+    if (event->mouse_moved.raw_x || event->mouse_moved.raw_y)
+    {
+        raw.count = 1;
+        raw.data[0].x = event->mouse_moved.raw_x;
+        raw.data[0].y = event->mouse_moved.raw_y;
+    }
+
     send_mouse_input(hwnd, event->window, flags, event->mouse_moved.x, event->mouse_moved.y,
-                     0, event->mouse_moved.drag, event->mouse_moved.time_ms);
+                     0, event->mouse_moved.drag, event->mouse_moved.time_ms, &raw);
 }
 
 
@@ -975,11 +984,11 @@ void macdrv_mouse_scroll(HWND hwnd, const macdrv_event *event)
     if (event->mouse_scroll.y_scroll)
         send_mouse_input(hwnd, event->window, MOUSEEVENTF_WHEEL | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE,
                          event->mouse_scroll.x, event->mouse_scroll.y,
-                         event->mouse_scroll.y_scroll, FALSE, event->mouse_scroll.time_ms);
+                         event->mouse_scroll.y_scroll, FALSE, event->mouse_scroll.time_ms, NULL);
     if (event->mouse_scroll.x_scroll)
         send_mouse_input(hwnd, event->window, MOUSEEVENTF_HWHEEL | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE,
                          event->mouse_scroll.x, event->mouse_scroll.y,
-                         event->mouse_scroll.x_scroll, FALSE, event->mouse_scroll.time_ms);
+                         event->mouse_scroll.x_scroll, FALSE, event->mouse_scroll.time_ms, NULL);
 }
 
 

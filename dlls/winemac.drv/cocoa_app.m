@@ -1278,6 +1278,10 @@ static NSString* WineLocalizedString(unsigned int stringID)
         {
             WineEventQueue* queue;
 
+            // Raw movement goes on from where the cursor was put.
+            rawMovePoint = pos;
+            rawMovePointValid = TRUE;
+
             // Discard all pending mouse move events.
             [eventQueuesLock lock];
             for (queue in eventQueues)
@@ -1451,6 +1455,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
             CGPoint point = CGEventGetLocation([anEvent CGEvent]);
             macdrv_event* event;
             BOOL absolute;
+            int raw_x, raw_y;
 
             // If we recently warped the cursor (other than in our cursor-clipping
             // event tap), discard mouse move events until we see an event which is
@@ -1520,6 +1525,19 @@ static NSString* WineLocalizedString(unsigned int stringID)
             {
                 if (self.clippingCursor)
                     [clipCursorHandler clipCursorLocation:&point];
+
+                // Raw input reports the movement in points, which doesn't
+                // depend on the display's pixel density, as on Windows.  It's
+                // taken from the location, not the event's deltas: those
+                // include the cursor's last warp.
+                if (rawMovePointValid)
+                {
+                    rawMoveDeltaX += point.x - rawMovePoint.x;
+                    rawMoveDeltaY += point.y - rawMovePoint.y;
+                }
+                rawMovePoint = point;
+                rawMovePointValid = TRUE;
+
                 point = cgpoint_win_from_mac(point);
 
                 event = macdrv_create_event(MOUSE_MOVED_ABSOLUTE, targetWindow);
@@ -1537,6 +1555,12 @@ static NSString* WineLocalizedString(unsigned int stringID)
                 /* deltaY is already flipped */
                 mouseMoveDeltaX += [anEvent deltaX];
                 mouseMoveDeltaY += [anEvent deltaY];
+                rawMoveDeltaX += [anEvent deltaX];
+                rawMoveDeltaY += [anEvent deltaY];
+                if (self.clippingCursor)
+                    [clipCursorHandler clipCursorLocation:&point];
+                rawMovePoint = point;
+                rawMovePointValid = TRUE;
 
                 event = macdrv_create_event(MOUSE_MOVED_RELATIVE, targetWindow);
                 event->mouse_moved.x = mouseMoveDeltaX * scale;
@@ -1547,7 +1571,16 @@ static NSString* WineLocalizedString(unsigned int stringID)
                 mouseMoveDeltaY -= event->mouse_moved.y / scale;
             }
 
-            if (event->type == MOUSE_MOVED_ABSOLUTE || event->mouse_moved.x || event->mouse_moved.y)
+            /* Keep the remainder after integer truncation. */
+            raw_x = rawMoveDeltaX;
+            raw_y = rawMoveDeltaY;
+            rawMoveDeltaX -= raw_x;
+            rawMoveDeltaY -= raw_y;
+            event->mouse_moved.raw_x = raw_x;
+            event->mouse_moved.raw_y = raw_y;
+
+            if (event->type == MOUSE_MOVED_ABSOLUTE || event->mouse_moved.x || event->mouse_moved.y ||
+                event->mouse_moved.raw_x || event->mouse_moved.raw_y)
             {
                 event->mouse_moved.time_ms = [self ticksForEventTime:[anEvent timestamp]];
                 event->mouse_moved.drag = drag;
@@ -1560,7 +1593,10 @@ static NSString* WineLocalizedString(unsigned int stringID)
             lastTargetWindow = targetWindow;
         }
         else
+        {
             lastTargetWindow = nil;
+            rawMovePointValid = FALSE;
+        }
 
         [self updateCursor:FALSE];
     }

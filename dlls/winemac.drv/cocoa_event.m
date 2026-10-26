@@ -229,6 +229,8 @@ static const OSType WineHotKeySignature = 'Wine';
                 lastEvent->event->mouse_moved.x = event->event->mouse_moved.x;
                 lastEvent->event->mouse_moved.y = event->event->mouse_moved.y;
             }
+            lastEvent->event->mouse_moved.raw_x += event->event->mouse_moved.raw_x;
+            lastEvent->event->mouse_moved.raw_y += event->event->mouse_moved.raw_y;
 
             lastEvent->event->mouse_moved.time_ms = event->event->mouse_moved.time_ms;
         }
