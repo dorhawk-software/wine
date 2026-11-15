@@ -238,6 +238,8 @@ struct macdrv_win_data
     unsigned int        per_pixel_alpha : 1;    /* is window using per-pixel alpha? */
     unsigned int        minimized : 1;          /* is window minimized? */
     unsigned int        fullscreen : 1;         /* is the window visible rect fullscreen? (unrelated to native AppKit/Cocoa fullscreen) */
+    unsigned int        frame_gesture : 1;      /* is something on the Mac side changing the maximized window's frame? */
+    RECT                gesture_start;          /* the window's visible rect when that began, raw pixels */
 };
 
 struct macdrv_client_surface
@@ -261,6 +263,7 @@ extern void macdrv_handle_event(const macdrv_event *event);
 
 extern void macdrv_window_close_requested(HWND hwnd);
 extern void macdrv_window_frame_changed(HWND hwnd, const macdrv_event *event);
+extern void macdrv_window_frame_settled(HWND hwnd);
 extern void macdrv_window_got_focus(HWND hwnd, const macdrv_event *event);
 extern void macdrv_window_lost_focus(HWND hwnd, const macdrv_event *event);
 extern void macdrv_app_activated(void);

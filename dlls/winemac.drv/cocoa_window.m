@@ -2116,6 +2116,13 @@ static inline BOOL stage_manager_enabled(void)
         macdrv_release_event(event);
     }
 
+    - (void) postWindowFrameSettled
+    {
+        macdrv_event* event = macdrv_create_event(WINDOW_FRAME_SETTLED, self);
+        [queue postEvent:event];
+        macdrv_release_event(event);
+    }
+
     - (void) postWindowFrameChanged:(NSRect)frame fullscreen:(BOOL)isFullscreen resizing:(BOOL)resizing skipSizeMove:(BOOL)skipSizeMove
     {
         macdrv_event* event;
@@ -2884,6 +2891,11 @@ static inline BOOL stage_manager_enabled(void)
                           fullscreen:([self styleMask] & NSWindowStyleMaskFullScreen) != 0
                             resizing:[self inLiveResize]
                         skipSizeMove:skipSizeMove];
+
+        /* A window tool changes a frame in steps (size, position, size again): tell the back end
+           when the frame has stopped changing, so it can judge the result as a whole. */
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(postWindowFrameSettled) object:nil];
+        [self performSelector:@selector(postWindowFrameSettled) withObject:nil afterDelay:0.3];
 
         [[[self contentView] inputContext] invalidateCharacterCoordinates];
         [self updateFullscreen];
