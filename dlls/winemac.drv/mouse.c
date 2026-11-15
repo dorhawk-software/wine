@@ -784,18 +784,20 @@ static BOOL get_icon_info(HICON handle, ICONINFOEXW *ret)
  *              cursor_points_per_pixel
  *
  * A cursor loaded from a resource (Windows' own, or the app's) comes in the size for the DPI of
- * the thread that loaded it: twice as big for a DPI-aware app in Retina mode. Shown at a point per
- * pixel, it would be twice the size of the Mac's pointer, so it covers as many points as it would
- * pixels at 96 DPI, as the app's windows do. A cursor an app makes from its own bitmaps, as games
- * do, isn't sized for the DPI and keeps a point per pixel.
+ * the window's thread: 32 pixels at 96 DPI, 64 at 192. In Retina mode a pixel is half a point, and
+ * a cursor is shown at a point per pixel, as the Mac's own are, so one loaded for 192 DPI would be
+ * twice the Mac pointer's size: it covers as many points as it would have pixels at 96 DPI.
+ * Without Retina mode a pixel is a point, and the cursor keeps the scale the app's windows have.
+ * A cursor an app makes from its own bitmaps, as games do, isn't sized for the DPI and keeps a
+ * point per pixel.
  */
 static double cursor_points_per_pixel(HWND hwnd, const ICONINFOEXW *info)
 {
-    UINT system_dpi = NtUserGetSystemDpiForProcess(NULL), dpi = hwnd ? NtUserGetDpiForWindow(hwnd) : 0;
+    UINT dpi;
 
-    if (!info->szModName[0] || !system_dpi) return 1;
-    if (!dpi) dpi = system_dpi;
-    return (retina_on ? 0.5 : 1) * system_dpi / dpi;
+    if (!info->szModName[0] || !retina_on) return 1;
+    if (!hwnd || !(dpi = NtUserGetDpiForWindow(hwnd))) dpi = NtUserGetSystemDpiForProcess(NULL);
+    return dpi ? 96.0 / dpi : 1;
 }
 
 
