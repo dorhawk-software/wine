@@ -86,7 +86,13 @@ static struct macdrv_window_features get_cocoa_window_features(struct macdrv_win
     struct macdrv_window_features wf = {0};
 
     if (ex_style & WS_EX_NOACTIVATE) wf.prevents_app_activation = TRUE;
-    if (EqualRect(&data->rects.window, &data->rects.visible)) return wf;
+    if (EqualRect(&data->rects.window, &data->rects.visible))
+    {
+        /* The app draws its own frame, but a sizing border still lets the user resize the
+         * window: let macOS and its window tools resize it too. */
+        if ((style & WS_THICKFRAME) && !data->shaped) wf.resizable = TRUE;
+        return wf;
+    }
 
     return get_window_features_for_style(style, ex_style, data->shaped);
 }
