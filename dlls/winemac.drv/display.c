@@ -874,8 +874,10 @@ static DEVMODEW *display_get_modes(CGDirectDisplayID display_id, int *modes_coun
 
         if (retina_enabled && display_mode_matches_descriptor(mode, desc))
         {
-            devmodes[i].dmPelsWidth *= 2;
-            devmodes[i].dmPelsHeight *= 2;
+            /* a display's own pixels per point: 2 on a Retina display, 1 on others */
+            int scale = retina_on ? macdrv_display_scale(display_id) : 2;
+            devmodes[i].dmPelsWidth *= scale;
+            devmodes[i].dmPelsHeight *= scale;
         }
     }
     free_display_mode_descriptor(desc);
@@ -932,8 +934,9 @@ static BOOL display_get_current_mode(struct macdrv_monitor *monitor, DEVMODEW *d
         struct display_mode_descriptor *desc = create_original_display_mode_descriptor(display_id);
         if (display_mode_matches_descriptor(display_mode, desc))
         {
-            devmode->dmPelsWidth *= 2;
-            devmode->dmPelsHeight *= 2;
+            int scale = retina_on ? macdrv_display_scale(display_id) : 2;
+            devmode->dmPelsWidth *= scale;
+            devmode->dmPelsHeight *= scale;
         }
         free_display_mode_descriptor(desc);
     }
@@ -1115,6 +1118,10 @@ UINT macdrv_UpdateDisplayDevices(const struct gdi_device_manager *device_manager
             DEVMODEW current_mode = { .dmSize = sizeof(current_mode) };
             UINT dpi = NtUserGetSystemDpiForProcess( NULL );
             char buffer[32];
+
+            /* each display its own DPI: the system DPI is the largest scale's (a Retina
+             * display's), a display with half the pixels per point has half of it */
+            dpi = dpi * macdrv_display_scale(adapter->id) / macdrv_max_display_scale();
 
             snprintf( buffer, sizeof(buffer), "%04x", adapter->id );
             device_manager->add_source( buffer, adapter->state_flags, dpi, param );

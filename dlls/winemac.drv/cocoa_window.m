@@ -322,6 +322,26 @@ static inline BOOL stage_manager_enabled(void)
 @end
 
 
+/* In Retina mode a window's own coordinates (its surface, its shape, its views) are in the
+ * pixels of the display it is on: 2 to a point on a Retina display, 1 on others. */
+static double window_scale(NSWindow *window)
+{
+    if (!retina_on) return 1;
+    if (!window) return macdrv_max_display_scale();
+    return window.backingScaleFactor > 1 ? 2 : 1;
+}
+
+static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
+{
+    double scale = window_scale(window);
+    if (CGRectIsNull(rect) || CGRectIsInfinite(rect)) return rect;
+    rect.origin.x /= scale;
+    rect.origin.y /= scale;
+    rect.size.width /= scale;
+    rect.size.height /= scale;
+    return rect;
+}
+
 @implementation WineBaseView
 
     - (void) setRetinaMode:(BOOL)mode
@@ -689,6 +709,9 @@ static inline BOOL stage_manager_enabled(void)
          * window and layer contentsScale
          * (non-retina mode with a retina monitor, and vice-versa).
          */
+        /* In Retina mode a window's pixels are those of the display it is on, so it takes
+         * that display's scale when it moves to another one. */
+        if (retina_on) return YES;
         if (layer.contentsScale != window.backingScaleFactor)
             return NO;
         return YES;
@@ -3134,7 +3157,7 @@ static inline BOOL stage_manager_enabled(void)
     {
         NSDragOperation ret;
         NSPoint pt = [[self contentView] convertPoint:[sender draggingLocation] fromView:nil];
-        CGPoint cgpt = cgpoint_win_from_mac(NSPointToCGPoint(pt));
+        CGPoint cgpt = CGPointMake(pt.x * window_scale(self), pt.y * window_scale(self));
 
         macdrv_query* query = macdrv_create_query();
         query->type = QUERY_DRAG_DROP_DRAG;
@@ -3154,7 +3177,7 @@ static inline BOOL stage_manager_enabled(void)
     {
         BOOL ret;
         NSPoint pt = [[self contentView] convertPoint:[sender draggingLocation] fromView:nil];
-        CGPoint cgpt = cgpoint_win_from_mac(NSPointToCGPoint(pt));
+        CGPoint cgpt = CGPointMake(pt.x * window_scale(self), pt.y * window_scale(self));
 
         macdrv_query* query = macdrv_create_query();
         query->type = QUERY_DRAG_DROP_DROP;
@@ -3370,8 +3393,8 @@ void macdrv_window_set_color_image(WineWindow *window, CGImageRef image, CGRect 
         WineContentView *view = [window contentView];
 
         [view setColorImage:image];
-        [view setSurfaceRect:cgrect_mac_from_win(rect)];
-        [view setNeedsDisplayInRect:NSRectFromCGRect(cgrect_mac_from_win(dirty))];
+        [view setSurfaceRect:local_mac_from_win(window, rect)];
+        [view setNeedsDisplayInRect:NSRectFromCGRect(local_mac_from_win(window, dirty))];
 
         CGImageRelease(image);
     });
@@ -3423,7 +3446,7 @@ void macdrv_set_window_shape(WineWindow *window, const CGRect *rects, int count)
 
             path = CGPathCreateMutable();
             for (i = 0; i < count; i++)
-                CGPathAddRect(path, NULL, cgrect_mac_from_win(rects[i]));
+                CGPathAddRect(path, NULL, local_mac_from_win(window, rects[i]));
             [window setShape:path];
             CGPathRelease(path);
         }
@@ -3493,7 +3516,11 @@ void macdrv_give_cocoa_window_focus(WineWindow *window, bool activate)
 void macdrv_set_window_min_max_sizes(WineWindow *window, CGSize min_size, CGSize max_size)
 {
     OnMainThread(^{
-        [window setWineMinSize:NSSizeFromCGSize(cgsize_mac_from_win(min_size)) maxSize:NSSizeFromCGSize(cgsize_mac_from_win(max_size))];
+        /* the largest size is in pixels of the whole desktop: in points it is largest on the
+         * display with the fewest pixels per point, where the window may go */
+        double scale = window_scale(window), max_scale = retina_on ? macdrv_min_display_scale() : 1;
+        [window setWineMinSize:NSMakeSize(min_size.width / scale, min_size.height / scale)
+                       maxSize:NSMakeSize(max_size.width / max_scale, max_size.height / max_scale)];
     });
 }
 
@@ -3575,7 +3602,7 @@ void macdrv_set_view_frame(WineContentView *view, CGRect rect)
     if (CGRectIsNull(rect)) rect = CGRectZero;
 
     OnMainThreadAsync(^{
-        NSRect newFrame = NSRectFromCGRect(cgrect_mac_from_win(rect));
+        NSRect newFrame = NSRectFromCGRect(local_mac_from_win((WineWindow*)[view window], rect));
         NSRect oldFrame = [view frame];
 
         if (!NSEqualRects(oldFrame, newFrame))

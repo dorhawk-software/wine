@@ -69,8 +69,7 @@ static void compute_desktop_rect(void)
     }
 
     for (i = 0; i < count; i++)
-        desktop_rect = CGRectUnion(desktop_rect, CGDisplayBounds(displayIDs[i]));
-    desktop_rect = cgrect_win_from_mac(desktop_rect);
+        desktop_rect = CGRectUnion(desktop_rect, macdrv_win_rect_for_display(displayIDs[i], CGDisplayBounds(displayIDs[i])));
 }
 
 

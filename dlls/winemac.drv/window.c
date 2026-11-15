@@ -29,6 +29,7 @@
 #include "macdrv.h"
 
 #include <IOKit/pwr_mgt/IOPMLib.h>
+#include <math.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(macdrv);
 
@@ -1814,10 +1815,17 @@ void macdrv_window_close_requested(HWND hwnd)
 }
 
 
-/* raw pixels in a number of Mac points */
-static int points(int count)
+/* raw pixels per Mac point on the display a raw rect is on: in Retina mode 2 on a Retina display,
+ * 1 on others */
+static double scale_of(const RECT *rect)
 {
-    return retina_on ? 2 * count : count;
+    return retina_on ? macdrv_scale_for_win_rect(cgrect_from_rect(*rect)) : 1;
+}
+
+/* raw pixels in a number of Mac points, on the display a raw rect is on */
+static int points(const RECT *rect, int count)
+{
+    return count * scale_of(rect);
 }
 
 
@@ -1836,8 +1844,8 @@ static BOOL reaches_work_area(const RECT *visible, MONITORINFO *info)
 
     info->cbSize = sizeof(*info);
     if (!monitor || !NtUserGetMonitorInfo(monitor, info)) return FALSE;
-    return visible->left <= info->rcWork.left + points(2) && visible->right >= info->rcWork.right - points(2) &&
-           visible->bottom >= info->rcWork.bottom - points(2);
+    return visible->left <= info->rcWork.left + points(visible, 2) && visible->right >= info->rcWork.right - points(visible, 2) &&
+           visible->bottom >= info->rcWork.bottom - points(visible, 2);
 }
 
 
@@ -1845,12 +1853,16 @@ static BOOL reaches_work_area(const RECT *visible, MONITORINFO *info)
  * macdrv_window_frame_settled */
 static BOOL moved_whole(const RECT *visible, const RECT *start, const MONITORINFO *end_info)
 {
-    int width = visible->right - visible->left, height = visible->bottom - visible->top;
-    int start_width = start->right - start->left, start_height = start->bottom - start->top;
+    /* sizes in points: the two displays may have different pixels per point */
+    double scale = scale_of(visible), start_scale = scale_of(start);
+    double width = (visible->right - visible->left) / scale, height = (visible->bottom - visible->top) / scale;
+    double start_width = (start->right - start->left) / start_scale, start_height = (start->bottom - start->top) / start_scale;
 
-    if (abs(width - start_width) <= points(2) && abs(height - start_height) <= points(2)) return TRUE;
-    return visible->left <= end_info->rcWork.left + points(2) && visible->right >= end_info->rcWork.right - points(2) &&
-           height >= start_height - points(2);
+    /* the same width; the height may differ by a title bar, as a display of another DPI gives the
+     * window's title bar and borders another size */
+    if (fabs(width - start_width) <= 2 && fabs(height - start_height) <= 40) return TRUE;
+    return visible->left <= end_info->rcWork.left + points(visible, 2) &&
+           visible->right >= end_info->rcWork.right - points(visible, 2) && height >= start_height - 2;
 }
 
 
@@ -1893,7 +1905,6 @@ void macdrv_window_frame_changed(HWND hwnd, const macdrv_event *event)
     {
         data->frame_gesture = TRUE;
         data->gesture_start = old_visible;
-        data->gesture_start_window = data->rects.window;
     }
 
     /* A maximized window that draws its own frame hangs its border past the work area, where win32u
@@ -1930,6 +1941,23 @@ void macdrv_window_frame_changed(HWND hwnd, const macdrv_event *event)
         if (send_sizemove)
             send_message(hwnd, WM_ENTERSIZEMOVE, 0, 0);
         NtUserSetRawWindowPos(hwnd, rect, flags, FALSE);
+
+        /* On a display with other pixels per point the window's title bar and borders are another
+         * number of pixels, so the window rect from the old ones doesn't give the frame macOS
+         * reported: place it again with the ones win32u gave it there. */
+        if (!IsRectEmpty(&old_visible) && scale_of(&visible) != scale_of(&old_visible) &&
+            (data = get_win_data(hwnd)))
+        {
+            RECT again = window_rect_from_visible(&data->rects, visible);
+            BOOL differs = !EqualRect(&data->rects.visible, &visible) && !EqualRect(&again, &data->rects.window);
+
+            release_win_data(data);
+            if (differs)
+            {
+                TRACE("%p on a display of another scale: placing it again at %s\n", hwnd, wine_dbgstr_rect(&again));
+                NtUserSetRawWindowPos(hwnd, again, flags & ~(SWP_NOMOVE | SWP_NOSIZE), FALSE);
+            }
+        }
         if (send_sizemove)
             send_message(hwnd, WM_EXITSIZEMOVE, 0, 0);
     }
@@ -1955,7 +1983,7 @@ void macdrv_window_frame_settled(HWND hwnd)
 {
     struct macdrv_win_data *data;
     MONITORINFO start_info, end_info;
-    RECT start, start_window, visible, window, frame;
+    RECT start, visible, window, frame;
     BOOL end_fills, same_display;
     UINT context;
     int start_top;
@@ -1968,7 +1996,6 @@ void macdrv_window_frame_settled(HWND hwnd)
     }
     data->frame_gesture = FALSE;
     start = data->gesture_start;
-    start_window = data->gesture_start_window;
     visible = data->rects.visible;
     window = data->rects.window;
     release_win_data(data);
@@ -1987,8 +2014,12 @@ void macdrv_window_frame_settled(HWND hwnd)
      * a menu bar: macOS keeps a frame a window tool sets below the menu bar, which a maximized window
      * with a Mac title bar may have reached into, and on another display there may be one. */
     start_top = start.top - start_info.rcWork.top;
-    end_fills = reaches_work_area(&visible, &end_info) && visible.top - end_info.rcWork.top <= start_top + points(40);
+    end_fills = reaches_work_area(&visible, &end_info) &&
+                (visible.top - end_info.rcWork.top) / scale_of(&visible) <= start_top / scale_of(&start) + 40;
     same_display = EqualRect(&start_info.rcMonitor, &end_info.rcMonitor);
+    TRACE("%p start %s on %s, now %s (window %s) on %s, fills %d\n", hwnd, wine_dbgstr_rect(&start),
+          wine_dbgstr_rect(&start_info.rcMonitor), wine_dbgstr_rect(&visible), wine_dbgstr_rect(&window),
+          wine_dbgstr_rect(&end_info.rcMonitor), end_fills);
 
     /* Moved to another display, the window may not fill it and still be meant to: a window tool may
      * move it without a new size, and macOS may hold a window's height to the display it leaves
@@ -2000,7 +2031,25 @@ void macdrv_window_frame_settled(HWND hwnd)
         TRACE("%p no longer fills a display: it restores to %s\n", hwnd, wine_dbgstr_rect(&window));
         NtUserSetRawWindowPos(hwnd, window, 0, TRUE);
         NtUserSetThreadDpiAwarenessContext(context);
-        perform_window_command(hwnd, WS_MAXIMIZE, 0, SC_RESTORE, HTMAXBUTTON);
+        /* restored now, not when a posted command arrives, to place it below */
+        if (!(NtUserGetWindowLongW(hwnd, GWL_STYLE) & WS_DISABLED))
+            send_message(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+
+        /* Restored, the window has the title bar and borders of a window that isn't maximized, on
+         * the display it is on now, which may be another number of pixels than the ones it kept
+         * while maximized: keep the frame where the tool left it. */
+        if ((data = get_win_data(hwnd)))
+        {
+            RECT again = window_rect_from_visible(&data->rects, visible);
+            BOOL moved = !EqualRect(&data->rects.visible, &visible) && !EqualRect(&again, &data->rects.window);
+
+            release_win_data(data);
+            if (moved && !(NtUserGetWindowLongW(hwnd, GWL_STYLE) & WS_MAXIMIZE))
+            {
+                TRACE("%p restored: keeping its frame with %s\n", hwnd, wine_dbgstr_rect(&again));
+                NtUserSetRawWindowPos(hwnd, again, SWP_NOACTIVATE | SWP_NOZORDER, FALSE);
+            }
+        }
         return;
     }
     if (!same_display)
@@ -2011,6 +2060,7 @@ void macdrv_window_frame_settled(HWND hwnd)
          * window's edges where they were from that area's edges (a border hidden past them, a Mac
          * title bar below the area's top). */
         RECT start_area = start_info.rcWork, end_area = end_info.rcWork;
+        double ratio = scale_of(&visible) / scale_of(&start);
 
         if (start.top <= start_info.rcMonitor.top && start.bottom >= start_info.rcMonitor.bottom &&
             !EqualRect(&start_info.rcMonitor, &start_info.rcWork))
@@ -2018,10 +2068,13 @@ void macdrv_window_frame_settled(HWND hwnd)
             start_area = start_info.rcMonitor;
             end_area = end_info.rcMonitor;
         }
-        frame.left = end_area.left + start_window.left - start_area.left;
-        frame.top = end_area.top + start_window.top - start_area.top;
-        frame.right = end_area.right + start_window.right - start_area.right;
-        frame.bottom = end_area.bottom + start_window.bottom - start_area.bottom;
+        /* The visible rect's edges keep their distance from the area's in points (a Mac title bar,
+         * a menu bar), whatever the displays' pixels per point; the window's own edges are where
+         * they now are from its visible rect, as win32u sized its border for the new display. */
+        frame.left = end_area.left + lround((start.left - start_area.left) * ratio) + window.left - visible.left;
+        frame.top = end_area.top + lround((start.top - start_area.top) * ratio) + window.top - visible.top;
+        frame.right = end_area.right + lround((start.right - start_area.right) * ratio) + window.right - visible.right;
+        frame.bottom = end_area.bottom + lround((start.bottom - start_area.bottom) * ratio) + window.bottom - visible.bottom;
         if (!EqualRect(&frame, &window))
         {
             TRACE("%p moved to another display: filling it with %s\n", hwnd, wine_dbgstr_rect(&frame));

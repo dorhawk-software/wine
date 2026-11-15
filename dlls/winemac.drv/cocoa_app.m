@@ -2292,6 +2292,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
     - (void) setRetinaMode:(BOOL)mode
     {
         retina_on = mode;
+        macdrv_invalidate_display_scales();
 
         [clipCursorHandler setRetinaMode:mode];
 

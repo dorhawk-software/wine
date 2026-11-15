@@ -139,75 +139,22 @@ extern bool retina_enabled;  /* Whether Retina mode is enabled via registry sett
 extern bool retina_on;       /* Whether Retina mode is currently active (enabled and display is in default mode). */
 extern bool enable_app_nap;
 
-static inline CGRect cgrect_mac_from_win(CGRect rect)
-{
-    if (retina_on)
-    {
-        rect.origin.x /= 2;
-        rect.origin.y /= 2;
-        rect.size.width /= 2;
-        rect.size.height /= 2;
-    }
-
-    return rect;
-}
-
-static inline CGRect cgrect_win_from_mac(CGRect rect)
-{
-    if (retina_on)
-    {
-        rect.origin.x *= 2;
-        rect.origin.y *= 2;
-        rect.size.width *= 2;
-        rect.size.height *= 2;
-    }
-
-    return rect;
-}
-
-static inline CGSize cgsize_mac_from_win(CGSize size)
-{
-    if (retina_on)
-    {
-        size.width /= 2;
-        size.height /= 2;
-    }
-
-    return size;
-}
-
-static inline CGSize cgsize_win_from_mac(CGSize size)
-{
-    if (retina_on)
-    {
-        size.width *= 2;
-        size.height *= 2;
-    }
-
-    return size;
-}
-
-static inline CGPoint cgpoint_mac_from_win(CGPoint point)
-{
-    if (retina_on)
-    {
-        point.x /= 2;
-        point.y /= 2;
-    }
-
-    return point;
-}
-
-static inline CGPoint cgpoint_win_from_mac(CGPoint point)
-{
-    if (retina_on)
-    {
-        point.x *= 2;
-        point.y *= 2;
-    }
-
-    return point;
-}
+/* Mac points and Windows pixels. In Retina mode each display has its own scale: a Retina
+ * display has 2 pixels to a point and reports twice the DPI of a display with 1, and a point or
+ * rect is converted with the scale of the display it is on. */
+extern CGRect cgrect_mac_from_win(CGRect rect);
+extern CGRect cgrect_win_from_mac(CGRect rect);
+extern CGSize cgsize_mac_from_win(CGSize size);
+extern CGSize cgsize_win_from_mac(CGSize size);
+extern CGPoint cgpoint_mac_from_win(CGPoint point);
+extern CGPoint cgpoint_win_from_mac(CGPoint point);
+extern double macdrv_scale_for_mac_rect(CGRect rect);
+extern double macdrv_scale_for_win_rect(CGRect rect);
+extern double macdrv_display_scale(CGDirectDisplayID display_id);
+extern double macdrv_max_display_scale(void);
+extern double macdrv_min_display_scale(void);
+extern CGRect macdrv_win_rect_for_display(CGDirectDisplayID display_id, CGRect mac_rect);
+extern void macdrv_invalidate_display_scales(void);
 
 extern int macdrv_start_cocoa_app(unsigned long long tickcount);
 extern void macdrv_window_rejected_focus(const struct macdrv_event *event);

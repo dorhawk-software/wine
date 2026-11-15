@@ -241,7 +241,6 @@ struct macdrv_win_data
     unsigned int        own_frame : 1;          /* does the app draw the window's whole frame (its visible rect is all of the window)? */
     unsigned int        frame_gesture : 1;      /* is something on the Mac side changing the maximized window's frame? */
     RECT                gesture_start;          /* the window's visible rect when that began, raw pixels */
-    RECT                gesture_start_window;   /* and its window rect */
 };
 
 struct macdrv_client_surface

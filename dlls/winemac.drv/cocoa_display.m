@@ -951,8 +951,8 @@ int macdrv_get_monitors(CGDirectDisplayID adapter_id, struct macdrv_monitor** ne
                     primary_index = monitor_count;
 
                 monitors[monitor_count].id = display_ids[i];
-                monitors[monitor_count].rc_monitor = cgrect_win_from_mac(convert_display_rect(screen.frame, primary_frame));
-                monitors[monitor_count].rc_work = cgrect_win_from_mac(convert_display_rect(screen.visibleFrame, primary_frame));
+                monitors[monitor_count].rc_monitor = macdrv_win_rect_for_display(display_ids[i], convert_display_rect(screen.frame, primary_frame));
+                monitors[monitor_count].rc_work = macdrv_win_rect_for_display(display_ids[i], convert_display_rect(screen.visibleFrame, primary_frame));
 
                 vendor_number = CGDisplayVendorNumber(monitors[monitor_count].id);
                 model_number = CGDisplayModelNumber(monitors[monitor_count].id);
@@ -1017,4 +1017,297 @@ void macdrv_free_monitors(struct macdrv_monitor* monitors, int monitor_count)
             free(monitors[monitor_count].edid);
     if (monitors)
         free(monitors);
+}
+
+
+/***********************************************************************
+ *              display scales
+ *
+ * Per-display scale between Mac points and Windows pixels. In Retina mode a display's pixels
+ * per point are its own (2 on a Retina display, 1 on others); a display's origin in pixels is
+ * its origin in points times the largest scale, so displays don't overlap.
+ */
+struct display_scale
+{
+    CGDirectDisplayID id;
+    CGRect frame;       /* in points, Quartz global coordinates */
+    CGPoint origin;     /* in pixels */
+    double scale;
+};
+
+static pthread_mutex_t display_scales_mutex = PTHREAD_MUTEX_INITIALIZER;
+static struct display_scale display_scales[32];
+static uint32_t display_scale_count;
+static double display_scale_max = 1;
+static int display_scales_valid;
+static int display_scales_callback;
+
+static void display_scales_reconfigured(CGDirectDisplayID display, CGDisplayChangeSummaryFlags flags, void *info)
+{
+    macdrv_invalidate_display_scales();
+}
+
+void macdrv_invalidate_display_scales(void)
+{
+    pthread_mutex_lock(&display_scales_mutex);
+    display_scales_valid = 0;
+    pthread_mutex_unlock(&display_scales_mutex);
+}
+
+/* with display_scales_mutex held */
+static void update_display_scales(void)
+{
+    CGDirectDisplayID ids[32];
+    uint32_t count, i;
+
+    if (display_scales_valid) return;
+    if (!display_scales_callback)
+    {
+        CGDisplayRegisterReconfigurationCallback(display_scales_reconfigured, NULL);
+        display_scales_callback = 1;
+    }
+
+    if (CGGetActiveDisplayList(32, ids, &count) != kCGErrorSuccess || !count)
+    {
+        ids[0] = CGMainDisplayID();
+        count = 1;
+    }
+
+    display_scale_max = 1;
+    for (i = 0; i < count; i++)
+    {
+        CGDisplayModeRef mode = CGDisplayCopyDisplayMode(ids[i]);
+        double scale = 1;
+
+        if (retina_on && mode && CGDisplayModeGetWidth(mode))
+            scale = floor((double)CGDisplayModeGetPixelWidth(mode) / CGDisplayModeGetWidth(mode) + 0.5);
+        if (scale < 1) scale = 1;
+        if (scale > 2) scale = 2;
+        if (mode) CGDisplayModeRelease(mode);
+
+        display_scales[i].id = ids[i];
+        display_scales[i].frame = CGDisplayBounds(ids[i]);
+        display_scales[i].scale = scale;
+        if (scale > display_scale_max) display_scale_max = scale;
+    }
+    for (i = 0; i < count; i++)
+    {
+        display_scales[i].origin.x = display_scales[i].frame.origin.x * display_scale_max;
+        display_scales[i].origin.y = display_scales[i].frame.origin.y * display_scale_max;
+    }
+    display_scale_count = count;
+    display_scales_valid = 1;
+}
+
+static CGRect win_frame(const struct display_scale *d)
+{
+    return CGRectMake(d->origin.x, d->origin.y, d->frame.size.width * d->scale, d->frame.size.height * d->scale);
+}
+
+static double distance_sq(CGRect rect, CGPoint pt)
+{
+    double dx = pt.x < CGRectGetMinX(rect) ? CGRectGetMinX(rect) - pt.x : pt.x > CGRectGetMaxX(rect) ? pt.x - CGRectGetMaxX(rect) : 0;
+    double dy = pt.y < CGRectGetMinY(rect) ? CGRectGetMinY(rect) - pt.y : pt.y > CGRectGetMaxY(rect) ? pt.y - CGRectGetMaxY(rect) : 0;
+    return dx * dx + dy * dy;
+}
+
+/* the display a rect (or, with an empty rect, a point) is on: the one it overlaps most, or the nearest */
+static const struct display_scale *find_display(CGRect rect, BOOL win)
+{
+    const struct display_scale *best = NULL;
+    double best_area = 0, best_dist = 0;
+    CGPoint center = CGPointMake(CGRectGetMidX(rect), CGRectGetMidY(rect));
+    uint32_t i;
+
+    update_display_scales();
+    if (!display_scale_count) return NULL;
+
+    for (i = 0; i < display_scale_count; i++)
+    {
+        CGRect frame = win ? win_frame(&display_scales[i]) : display_scales[i].frame;
+        CGRect inter = CGRectIntersection(frame, rect);
+        double area;
+
+        if (rect.size.width <= 0 || rect.size.height <= 0)
+        {
+            if (CGRectContainsPoint(frame, rect.origin)) return &display_scales[i];
+            continue;
+        }
+        if (CGRectIsNull(inter)) continue;
+        area = inter.size.width * inter.size.height;
+        if (area > best_area) { best_area = area; best = &display_scales[i]; }
+    }
+    if (best) return best;
+
+    for (i = 0; i < display_scale_count; i++)
+    {
+        CGRect frame = win ? win_frame(&display_scales[i]) : display_scales[i].frame;
+        double dist = distance_sq(frame, rect.size.width > 0 ? center : rect.origin);
+        if (!best || dist < best_dist) { best_dist = dist; best = &display_scales[i]; }
+    }
+    return best;
+}
+
+static CGRect rect_win_from_mac(const struct display_scale *d, CGRect rect)
+{
+    rect.origin.x = d->origin.x + (rect.origin.x - d->frame.origin.x) * d->scale;
+    rect.origin.y = d->origin.y + (rect.origin.y - d->frame.origin.y) * d->scale;
+    rect.size.width *= d->scale;
+    rect.size.height *= d->scale;
+    return rect;
+}
+
+static CGRect rect_mac_from_win(const struct display_scale *d, CGRect rect)
+{
+    rect.origin.x = d->frame.origin.x + (rect.origin.x - d->origin.x) / d->scale;
+    rect.origin.y = d->frame.origin.y + (rect.origin.y - d->origin.y) / d->scale;
+    rect.size.width /= d->scale;
+    rect.size.height /= d->scale;
+    return rect;
+}
+
+CGRect cgrect_win_from_mac(CGRect rect)
+{
+    const struct display_scale *d;
+
+    if (!retina_on || CGRectIsNull(rect) || CGRectIsInfinite(rect)) return rect;
+    pthread_mutex_lock(&display_scales_mutex);
+    if ((d = find_display(rect, FALSE))) rect = rect_win_from_mac(d, rect);
+    pthread_mutex_unlock(&display_scales_mutex);
+    return rect;
+}
+
+CGRect cgrect_mac_from_win(CGRect rect)
+{
+    const struct display_scale *d;
+
+    if (!retina_on || CGRectIsNull(rect) || CGRectIsInfinite(rect)) return rect;
+    pthread_mutex_lock(&display_scales_mutex);
+    if ((d = find_display(rect, TRUE))) rect = rect_mac_from_win(d, rect);
+    pthread_mutex_unlock(&display_scales_mutex);
+    return rect;
+}
+
+CGPoint cgpoint_win_from_mac(CGPoint point)
+{
+    CGRect rect = CGRectMake(point.x, point.y, 0, 0);
+    const struct display_scale *d;
+
+    if (!retina_on) return point;
+    pthread_mutex_lock(&display_scales_mutex);
+    if ((d = find_display(rect, FALSE))) rect = rect_win_from_mac(d, rect);
+    pthread_mutex_unlock(&display_scales_mutex);
+    return rect.origin;
+}
+
+CGPoint cgpoint_mac_from_win(CGPoint point)
+{
+    CGRect rect = CGRectMake(point.x, point.y, 0, 0);
+    const struct display_scale *d;
+
+    if (!retina_on) return point;
+    pthread_mutex_lock(&display_scales_mutex);
+    if ((d = find_display(rect, TRUE))) rect = rect_mac_from_win(d, rect);
+    pthread_mutex_unlock(&display_scales_mutex);
+    return rect.origin;
+}
+
+/* sizes on their own: the largest scale, as before */
+CGSize cgsize_mac_from_win(CGSize size)
+{
+    double scale = macdrv_max_display_scale();
+    size.width /= scale;
+    size.height /= scale;
+    return size;
+}
+
+CGSize cgsize_win_from_mac(CGSize size)
+{
+    double scale = macdrv_max_display_scale();
+    size.width *= scale;
+    size.height *= scale;
+    return size;
+}
+
+double macdrv_scale_for_mac_rect(CGRect rect)
+{
+    const struct display_scale *d;
+    double scale = 1;
+
+    if (!retina_on) return 1;
+    pthread_mutex_lock(&display_scales_mutex);
+    if ((d = find_display(rect, FALSE))) scale = d->scale;
+    pthread_mutex_unlock(&display_scales_mutex);
+    return scale;
+}
+
+double macdrv_scale_for_win_rect(CGRect rect)
+{
+    const struct display_scale *d;
+    double scale = 1;
+
+    if (!retina_on) return 1;
+    pthread_mutex_lock(&display_scales_mutex);
+    if ((d = find_display(rect, TRUE))) scale = d->scale;
+    pthread_mutex_unlock(&display_scales_mutex);
+    return scale;
+}
+
+double macdrv_display_scale(CGDirectDisplayID display_id)
+{
+    double scale = 1;
+    uint32_t i;
+
+    if (!retina_on) return 1;
+    pthread_mutex_lock(&display_scales_mutex);
+    update_display_scales();
+    for (i = 0; i < display_scale_count; i++)
+        if (display_scales[i].id == display_id || CGDisplayMirrorsDisplay(display_id) == display_scales[i].id)
+            scale = display_scales[i].scale;
+    pthread_mutex_unlock(&display_scales_mutex);
+    return scale;
+}
+
+double macdrv_max_display_scale(void)
+{
+    double scale;
+
+    if (!retina_on) return 1;
+    pthread_mutex_lock(&display_scales_mutex);
+    update_display_scales();
+    scale = display_scale_max;
+    pthread_mutex_unlock(&display_scales_mutex);
+    return scale;
+}
+
+/* a rect on a given display (its frame, its work area) in pixels */
+CGRect macdrv_win_rect_for_display(CGDirectDisplayID display_id, CGRect mac_rect)
+{
+    uint32_t i;
+
+    if (!retina_on) return mac_rect;
+    pthread_mutex_lock(&display_scales_mutex);
+    update_display_scales();
+    for (i = 0; i < display_scale_count; i++)
+        if (display_scales[i].id == display_id || CGDisplayMirrorsDisplay(display_id) == display_scales[i].id)
+        {
+            mac_rect = rect_win_from_mac(&display_scales[i], mac_rect);
+            break;
+        }
+    pthread_mutex_unlock(&display_scales_mutex);
+    return mac_rect;
+}
+
+double macdrv_min_display_scale(void)
+{
+    double scale = 2;
+    uint32_t i;
+
+    if (!retina_on) return 1;
+    pthread_mutex_lock(&display_scales_mutex);
+    update_display_scales();
+    for (i = 0; i < display_scale_count; i++)
+        if (display_scales[i].scale < scale) scale = display_scales[i].scale;
+    pthread_mutex_unlock(&display_scales_mutex);
+    return scale;
 }
