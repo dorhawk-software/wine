@@ -1,3 +1,29 @@
+## THIS FORK
+
+This is Dorhawk Software's Wine, the Wine that Gentes ships. Gentes is a
+Mac app that runs Windows apps. The fork starts from Hadron's Wine
+(https://github.com/Broyojo/hadron), which runs natively on Apple silicon
+with FEX. On top of that it carries our fixes that make Windows apps
+behave like Mac apps: macOS's window tools, maximizing, sideways
+scrolling, and cursor sizes.
+
+Branches:
+- gentes (the default): Hadron's Wine plus our fixes.
+- hadron-<version>: Hadron's Wine as Hadron released it.
+- master: Wine's own master branch.
+
+Our fixes are written with an AI coding agent (Claude Code). A software
+engineer directs, reviews and tests each one on real Macs with real
+apps. WineHQ does not accept code written with an LLM, however it was
+reviewed and tested. So we do not send these fixes to Wine, and we never
+pass them off as written by hand. We think that rule is a mistake, and
+we keep it. Each commit message describes the problem it fixes and how
+to see it.
+
+Like Wine, this fork is free software under the GNU LGPL; see the file
+LICENSE for the details.
+
+
 ## INTRODUCTION
 
 Wine is a program which allows running Microsoft Windows programs
