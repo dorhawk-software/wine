@@ -2179,7 +2179,9 @@ static RECT get_visible_rect( HWND hwnd, BOOL shaped, UINT style, UINT ex_style,
 
 static BOOL get_surface_rect( const RECT *visible_rect, RECT *surface_rect )
 {
-    RECT virtual_rect = get_virtual_screen_rect( no_dpi, MDT_RAW_DPI );
+    /* the visible rect is in the thread's DPI, as the virtual screen must be: in raw pixels, a
+     * window on a display with another DPI than the system's can be outside it, and get no surface */
+    RECT virtual_rect = get_virtual_screen_rect( get_thread_dpi(), MDT_DEFAULT );
 
     *surface_rect = *visible_rect;
 
