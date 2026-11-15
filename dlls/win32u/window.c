@@ -2124,7 +2124,7 @@ done:
 }
 
 
-static RECT get_visible_rect( HWND hwnd, BOOL shaped, UINT style, UINT ex_style, const struct window_rects *rects )
+static RECT get_visible_rect_unclipped( HWND hwnd, BOOL shaped, UINT style, UINT ex_style, const struct window_rects *rects )
 {
     struct ratio dpi = get_dpi_for_window( hwnd );
     UINT style_mask, ex_style_mask;
@@ -2146,6 +2146,34 @@ static RECT get_visible_rect( HWND hwnd, BOOL shaped, UINT style, UINT ex_style,
     TRACE( "hwnd %p, rects %s, style %#x, ex_style %#x -> visible_rect %s\n", hwnd,
            debugstr_window_rects( rects ), style, ex_style, wine_dbgstr_rect( &visible_rect ) );
     return visible_rect;
+}
+
+/* Windows maximizes a window with a sizing border so that the border hangs past the edges of
+ * the work area: off the monitor, or under the taskbar, so the user never sees it. A host window
+ * would show it, and the host may move the whole window to keep its top edge on screen (macOS
+ * keeps windows below the menu bar), pushing the rest past the other edge. So show a maximized
+ * window only where Windows would: within the work area of its monitor, or within the monitor for
+ * a window Windows maximizes over the whole monitor (a popup without a caption). */
+static RECT get_visible_rect( HWND hwnd, BOOL shaped, UINT style, UINT ex_style, const struct window_rects *rects )
+{
+    RECT visible_rect = get_visible_rect_unclipped( hwnd, shaped, style, ex_style, rects ), area, clipped, dummy;
+    MONITORINFO info;
+
+    if (!(style & WS_MAXIMIZE) || (style & WS_CHILD) || get_present_rect( hwnd, &dummy, get_thread_dpi() ))
+        return visible_rect;
+
+    info = monitor_info_from_rect( rects->window, get_thread_dpi() );
+    if (IsRectEmpty( &info.rcMonitor )) return visible_rect;
+    if ((style & WS_MAXIMIZEBOX) && ((style & WS_CAPTION) == WS_CAPTION || !(style & WS_POPUP)))
+        area = info.rcWork;
+    else
+        area = info.rcMonitor;
+    if (!intersect_rect( &clipped, &visible_rect, &area )) return visible_rect;
+
+    if (!EqualRect( &clipped, &visible_rect ))
+        TRACE( "hwnd %p maximized: visible_rect %s clipped to %s\n", hwnd, wine_dbgstr_rect( &visible_rect ),
+               wine_dbgstr_rect( &clipped ) );
+    return clipped;
 }
 
 
