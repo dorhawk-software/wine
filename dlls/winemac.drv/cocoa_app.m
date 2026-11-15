@@ -1086,14 +1086,19 @@ static NSString* WineLocalizedString(unsigned int stringID)
         CGImageRef cgimage = (CGImageRef)frame[@"image"];
         /* A cursor covers a point for each of its pixels, in Retina mode too, as the Mac's own
            cursors do: halved to the display's pixels, a game's cursor is half the size of the
-           Mac's pointer and of what the game shows on a display without Retina mode. */
-        CGSize size = CGSizeMake(CGImageGetWidth(cgimage), CGImageGetHeight(cgimage));
+           Mac's pointer and of what the game shows on a display without Retina mode. A cursor
+           Windows sized for the DPI says how many points it covers per pixel (see
+           macdrv_SetCursor). */
+        double pointsPerPixel = frame[@"pointsPerPixel"] ? [frame[@"pointsPerPixel"] doubleValue] : 1;
+        CGSize size = CGSizeMake(CGImageGetWidth(cgimage) * pointsPerPixel, CGImageGetHeight(cgimage) * pointsPerPixel);
         NSImage* image = [[NSImage alloc] initWithCGImage:cgimage size:NSSizeFromCGSize(size)];
         CFDictionaryRef hotSpotDict = (CFDictionaryRef)frame[@"hotSpot"];
         CGPoint hotSpot;
 
         if (!CGPointMakeWithDictionaryRepresentation(hotSpotDict, &hotSpot))
             hotSpot = CGPointZero;
+        hotSpot.x *= pointsPerPixel;
+        hotSpot.y *= pointsPerPixel;
         self.cursor = [[[NSCursor alloc] initWithImage:image hotSpot:NSPointFromCGPoint(hotSpot)] autorelease];
         [image release];
         [self unhideCursor];

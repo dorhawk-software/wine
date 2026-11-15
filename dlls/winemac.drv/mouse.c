@@ -781,6 +781,63 @@ static BOOL get_icon_info(HICON handle, ICONINFOEXW *ret)
 
 
 /***********************************************************************
+ *              cursor_points_per_pixel
+ *
+ * A cursor loaded from a resource (Windows' own, or the app's) comes in the size for the DPI of
+ * the thread that loaded it: twice as big for a DPI-aware app in Retina mode. Shown at a point per
+ * pixel, it would be twice the size of the Mac's pointer, so it covers as many points as it would
+ * pixels at 96 DPI, as the app's windows do. A cursor an app makes from its own bitmaps, as games
+ * do, isn't sized for the DPI and keeps a point per pixel.
+ */
+static double cursor_points_per_pixel(HWND hwnd, const ICONINFOEXW *info)
+{
+    UINT system_dpi = NtUserGetSystemDpiForProcess(NULL), dpi = hwnd ? NtUserGetDpiForWindow(hwnd) : 0;
+
+    if (!info->szModName[0] || !system_dpi) return 1;
+    if (!dpi) dpi = system_dpi;
+    return (retina_on ? 0.5 : 1) * system_dpi / dpi;
+}
+
+
+/***********************************************************************
+ *              with_points_per_pixel
+ *
+ * The cursor's frames, each with "pointsPerPixel": how many points the image covers per pixel.
+ */
+static CFArrayRef with_points_per_pixel(CFArrayRef frames, double points_per_pixel)
+{
+    CFMutableArrayRef scaled;
+    CFNumberRef number;
+    CFIndex i, count = CFArrayGetCount(frames);
+
+    if (points_per_pixel == 1) return frames;
+    if (!(scaled = CFArrayCreateMutable(NULL, count, &kCFTypeArrayCallBacks))) return frames;
+    if (!(number = CFNumberCreate(NULL, kCFNumberDoubleType, &points_per_pixel)))
+    {
+        CFRelease(scaled);
+        return frames;
+    }
+    for (i = 0; i < count; i++)
+    {
+        CFMutableDictionaryRef frame = CFDictionaryCreateMutableCopy(NULL, 0, CFArrayGetValueAtIndex(frames, i));
+        if (!frame) break;
+        CFDictionarySetValue(frame, CFSTR("pointsPerPixel"), number);
+        CFArrayAppendValue(scaled, frame);
+        CFRelease(frame);
+    }
+    CFRelease(number);
+    if (i < count)
+    {
+        CFRelease(scaled);
+        return frames;
+    }
+    TRACE("cursor shown at %g points per pixel\n", points_per_pixel);
+    CFRelease(frames);
+    return scaled;
+}
+
+
+/***********************************************************************
  *              SetCursor (MACDRV.@)
  */
 void macdrv_SetCursor(HWND hwnd, HCURSOR cursor)
@@ -846,6 +903,8 @@ void macdrv_SetCursor(HWND hwnd, HCURSOR cursor)
             }
             else
                 cursor_frames = create_monochrome_cursor(hdc, &info, bm.bmWidth, bm.bmHeight);
+            if (cursor_frames)
+                cursor_frames = with_points_per_pixel(cursor_frames, cursor_points_per_pixel(hwnd, &info));
 
             NtGdiDeleteObjectApp(info.hbmMask);
             NtGdiDeleteObjectApp(hdc);
