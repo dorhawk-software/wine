@@ -4831,7 +4831,9 @@ static BOOL get_monitor_info( HMONITOR handle, MONITORINFO *info, struct ratio d
 
 static HMONITOR monitor_from_rect( const RECT *rect, UINT flags, struct ratio dpi_from )
 {
-    struct ratio dpi = {system_dpi, 1};
+    /* a per-monitor aware rect is in each monitor's own pixels, which are only the system DPI's
+     * when every monitor has the system DPI: compare it with the monitors' own rects */
+    struct ratio dpi = dpi_from.num ? (struct ratio){system_dpi, 1} : no_dpi;
     struct monitor *monitor;
     HMONITOR ret = 0;
     RECT r;
