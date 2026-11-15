@@ -48,6 +48,84 @@ static const struct gdi_obj_funcs bitmap_funcs =
 };
 
 
+
+/***********************************************************************
+ *           GDI scaling: bitmaps compatible with a scaled DC
+ *
+ * A bitmap a program makes compatible with a scaled DC has the DC's pixel density: a program
+ * that draws off screen first and then copies to its window gets as sharp a result as it would
+ * drawing to the window. The program sees the size it asked for; its bits are read and written
+ * through a copy at that size.
+ */
+static HBITMAP create_scaled_bitmap( INT width, INT height, UINT planes, UINT bpp,
+                                     struct ratio from, struct ratio to )
+{
+    RECT rect = {0, 0, abs( width ), abs( height )};
+    BITMAPOBJ *bmp;
+    HBITMAP ret;
+
+    rect = map_dpi_rect( rect, from, to );
+    if (!(ret = NtGdiCreateBitmap( max( 1, rect.right ), max( 1, rect.bottom ), planes, bpp, NULL ))) return 0;
+    if ((bmp = GDI_GetObjPtr( ret, NTGDI_OBJ_BITMAP )))
+    {
+        bmp->scale_from = from;
+        bmp->scale_to = to;
+        bmp->program_size.cx = abs( width );
+        bmp->program_size.cy = abs( height );
+        GDI_ReleaseObj( ret );
+    }
+    return ret;
+}
+
+BOOL is_scaled_bitmap( HBITMAP hbitmap )
+{
+    BITMAPOBJ *bmp = GDI_GetObjPtr( hbitmap, NTGDI_OBJ_BITMAP );
+    BOOL ret;
+
+    if (!bmp) return FALSE;
+    ret = bmp->scale_from.num != 0;
+    GDI_ReleaseObj( hbitmap );
+    return ret;
+}
+
+/* copies a bitmap into another the program's size, scaled or not, through two memory DCs */
+BOOL copy_bitmap_scaled( HBITMAP src, HBITMAP dst )
+{
+    BITMAP bm;
+    HDC hdc_src, hdc_dst;
+    BOOL ret = FALSE;
+
+    if (!NtGdiExtGetObjectW( dst, sizeof(bm), &bm )) return FALSE;
+    hdc_src = NtGdiCreateCompatibleDC( 0 );
+    hdc_dst = NtGdiCreateCompatibleDC( 0 );
+    if (NtGdiSelectBitmap( hdc_src, src ) && NtGdiSelectBitmap( hdc_dst, dst ))
+    {
+        set_stretch_blt_mode( hdc_dst, HALFTONE );
+        ret = NtGdiStretchBlt( hdc_dst, 0, 0, bm.bmWidth, bm.bmHeight,
+                               hdc_src, 0, 0, bm.bmWidth, bm.bmHeight, SRCCOPY, 0 );
+    }
+    NtGdiDeleteObjectApp( hdc_src );
+    NtGdiDeleteObjectApp( hdc_dst );
+    return ret;
+}
+
+/* a plain bitmap of the program's size with a scaled bitmap's picture */
+HBITMAP unscaled_bitmap_copy( HBITMAP hbitmap )
+{
+    BITMAP bm;
+    HBITMAP ret;
+
+    if (!NtGdiExtGetObjectW( hbitmap, sizeof(bm), &bm )) return 0;
+    if (!(ret = NtGdiCreateBitmap( bm.bmWidth, bm.bmHeight, bm.bmPlanes, bm.bmBitsPixel, NULL ))) return 0;
+    if (!copy_bitmap_scaled( hbitmap, ret ))
+    {
+        WARN( "can't copy %p, it may be selected in a DC\n", hbitmap );
+        NtGdiDeleteObjectApp( ret );
+        return 0;
+    }
+    return ret;
+}
+
 /******************************************************************************
  *           NtGdiCreateCompatibleBitmap    (win32u.@)
  *
@@ -63,6 +141,28 @@ HBITMAP WINAPI NtGdiCreateCompatibleBitmap( HDC hdc, INT width, INT height )
     TRACE( "(%p,%d,%d)\n", hdc, width, height );
 
     if (!width || !height) return 0;
+
+    if (gdi_scaling)
+    {
+        DC *dc = get_dc_ptr( hdc );
+        struct ratio from = {0}, to = {0};
+        int bits = 0;
+
+        if (dc)
+        {
+            if (dc_is_scaled( dc )) { from = dc->scale_from; to = dc->scale_to; }
+            release_dc_ptr( dc );
+        }
+        if (from.num)
+        {
+            if (get_gdi_object_type( hdc ) != NTGDI_OBJ_MEMDC)
+                bits = NtGdiGetDeviceCaps( hdc, BITSPIXEL );
+            else if (NtGdiExtGetObjectW( NtGdiGetDCObject( hdc, NTGDI_OBJ_SURF ), sizeof(dib), &dib ) == sizeof(BITMAP))
+                bits = dib.dsBm.bmBitsPixel;
+            if (bits == 16 || bits == 8) bits = 32;  /* emulated, as below */
+            if (bits) return create_scaled_bitmap( width, height, 1, bits, from, to );
+        }
+    }
 
     bpp = NtGdiGetDeviceCaps( hdc, BITSPIXEL );
     /* 8-bit and 16-bit display modes are emulated */
@@ -228,7 +328,24 @@ HBITMAP WINAPI NtGdiCreateBitmap( INT width, INT height, UINT planes,
  *    Success: Number of bytes copied
  *    Failure: 0
  */
-LONG WINAPI NtGdiGetBitmapBits(
+static LONG get_bitmap_bits( HBITMAP hbitmap, LONG count, LPVOID bits );
+
+LONG WINAPI NtGdiGetBitmapBits( HBITMAP hbitmap, LONG count, LPVOID bits )
+{
+    /* GDI scaling: a scaled bitmap's bits at the size the program asked for */
+    if (is_scaled_bitmap( hbitmap ))
+    {
+        HBITMAP copy = unscaled_bitmap_copy( hbitmap );
+        LONG ret;
+        if (!copy) return 0;
+        ret = get_bitmap_bits( copy, count, bits );
+        NtGdiDeleteObjectApp( copy );
+        return ret;
+    }
+    return get_bitmap_bits( hbitmap, count, bits );
+}
+
+static LONG get_bitmap_bits(
     HBITMAP hbitmap, /* [in]  Handle to bitmap */
     LONG count,        /* [in]  Number of bytes to copy */
     LPVOID bits)       /* [out] Pointer to buffer to receive bits */
@@ -297,7 +414,24 @@ done:
  *    Success: Number of bytes used in setting the bitmap bits
  *    Failure: 0
  */
-LONG WINAPI NtGdiSetBitmapBits(
+static LONG set_bitmap_bits( HBITMAP hbitmap, LONG count, LPCVOID bits );
+
+LONG WINAPI NtGdiSetBitmapBits( HBITMAP hbitmap, LONG count, LPCVOID bits )
+{
+    /* GDI scaling: the program's bits, at its size, scaled into the bitmap */
+    if (is_scaled_bitmap( hbitmap ))
+    {
+        HBITMAP copy = unscaled_bitmap_copy( hbitmap );
+        LONG ret;
+        if (!copy) return 0;
+        if ((ret = set_bitmap_bits( copy, count, bits ))) copy_bitmap_scaled( copy, hbitmap );
+        NtGdiDeleteObjectApp( copy );
+        return ret;
+    }
+    return set_bitmap_bits( hbitmap, count, bits );
+}
+
+static LONG set_bitmap_bits(
     HBITMAP hbitmap, /* [in] Handle to bitmap */
     LONG count,        /* [in] Number of bytes in bitmap array */
     LPCVOID bits)      /* [in] Address of array with bitmap bits */
@@ -467,7 +601,11 @@ HGDIOBJ WINAPI NtGdiSelectBitmap( HDC hdc, HGDIOBJ handle )
         dc->attr->vis_rect.right  = bitmap->dib.dsBm.bmWidth;
         dc->attr->vis_rect.bottom = bitmap->dib.dsBm.bmHeight;
         dc->device_rect = dc->attr->vis_rect;
+        /* GDI scaling: a DC draws into a scaled bitmap at the bitmap's pixel density */
+        dc->scale_from = bitmap->scale_from;
+        dc->scale_to = bitmap->scale_to;
         GDI_ReleaseObj( handle );
+        DC_UpdateXforms( dc );
         DC_InitDC( dc );
         GDI_dec_ref_count( ret );
     }
@@ -509,6 +647,13 @@ static INT BITMAP_GetObject( HGDIOBJ handle, INT count, LPVOID buffer )
         BITMAP *bitmap = buffer;
         *bitmap = bmp->dib.dsBm;
         bitmap->bmBits = NULL;
+        if (bmp->scale_from.num)
+        {
+            /* GDI scaling: the size the program asked for */
+            bitmap->bmWidth = bmp->program_size.cx;
+            bitmap->bmHeight = bmp->program_size.cy;
+            bitmap->bmWidthBytes = get_bitmap_stride( bitmap->bmWidth, bitmap->bmBitsPixel );
+        }
         ret = sizeof(BITMAP);
     }
     GDI_ReleaseObj( handle );

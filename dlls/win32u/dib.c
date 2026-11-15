@@ -654,10 +654,31 @@ INT WINAPI NtGdiStretchDIBitsInternal( HDC hdc, INT xDst, INT yDst, INT widthDst
 }
 
 
+static int set_di_bits_unscaled( HDC hdc, HBITMAP hbitmap, UINT startscan, UINT lines, LPCVOID bits,
+                                 const BITMAPINFO *info, UINT coloruse );
+
 /* Sets pixels in a bitmap using colors from DIB, see SetDIBits */
 static int set_di_bits( HDC hdc, HBITMAP hbitmap, UINT startscan,
                         UINT lines, LPCVOID bits, const BITMAPINFO *info,
                         UINT coloruse )
+{
+    /* GDI scaling: the program's bits, at its size, scaled into the bitmap */
+    if (is_scaled_bitmap( hbitmap ))
+    {
+        HBITMAP copy = unscaled_bitmap_copy( hbitmap );
+        int ret;
+        if (!copy) return 0;
+        if ((ret = set_di_bits_unscaled( hdc, copy, startscan, lines, bits, info, coloruse )))
+            copy_bitmap_scaled( copy, hbitmap );
+        NtGdiDeleteObjectApp( copy );
+        return ret;
+    }
+    return set_di_bits_unscaled( hdc, hbitmap, startscan, lines, bits, info, coloruse );
+}
+
+static int set_di_bits_unscaled( HDC hdc, HBITMAP hbitmap, UINT startscan,
+                                 UINT lines, LPCVOID bits, const BITMAPINFO *info,
+                                 UINT coloruse )
 {
     BITMAPOBJ *bitmap;
     char src_bmibuf[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
@@ -849,6 +870,37 @@ INT nulldrv_SetDIBitsToDevice( PHYSDEV dev, INT x_dst, INT y_dst, DWORD cx, DWOR
     dst.y = pt.y;
     dst.width = cx;
     dst.height = cy;
+
+    if (dc_is_scaled( dc ))
+    {
+        /* GDI scaling: the bits cover as many of the program's pixels, so they are stretched */
+        double scale = dc_scale( dc );
+
+        dst.width = GDI_ROUND( cx * scale );
+        dst.height = GDI_ROUND( cy * scale );
+        get_bounding_rect( &rect, dst.x, dst.y, dst.width, dst.height );
+        if (!clip_visrect( dc, &dst.visrect, &rect )) goto done;
+        if (!intersect_vis_rectangles( &dst, &src )) goto done;
+
+        dev = GET_DC_PHYSDEV( dc, pPutImage );
+        copy_bitmapinfo( dst_info, src_info );
+        err = dev->funcs->pPutImage( dev, 0, dst_info, &src_bits, &src, &dst, SRCCOPY );
+        if (err == ERROR_BAD_FORMAT)
+        {
+            err = convert_bits( src_info, &src, dst_info, &src_bits );
+            if (!err) err = dev->funcs->pPutImage( dev, 0, dst_info, &src_bits, &src, &dst, SRCCOPY );
+        }
+        if (err == ERROR_TRANSFORM_NOT_SUPPORTED)
+        {
+            copy_bitmapinfo( src_info, dst_info );
+            err = stretch_bits( src_info, &src, dst_info, &dst, &src_bits,
+                                scale > 1 ? STRETCH_DELETESCANS : STRETCH_HALFTONE );
+            if (!err) err = dev->funcs->pPutImage( dev, 0, dst_info, &src_bits, &src, &dst, SRCCOPY );
+        }
+        if (err) lines = 0;
+        goto done;
+    }
+
     if (dc->attr->layout & LAYOUT_RTL) dst.x -= cx - 1;
 
     rect.left = dst.x;
@@ -1199,9 +1251,29 @@ BITMAPINFO *copy_packed_dib( const BITMAPINFO *src_info, UINT usage )
  *
  * Retrieves bits of bitmap and copies to buffer.
  */
+static INT get_di_bits( HDC hdc, HBITMAP hbitmap, UINT startscan, UINT lines, void *bits,
+                        BITMAPINFO *info, UINT coloruse, UINT max_bits, UINT max_info );
+
 INT WINAPI NtGdiGetDIBitsInternal( HDC hdc, HBITMAP hbitmap, UINT startscan, UINT lines,
                                    void *bits, BITMAPINFO *info, UINT coloruse,
                                    UINT max_bits, UINT max_info )
+{
+    /* GDI scaling: a scaled bitmap's bits at the size the program asked for */
+    if (is_scaled_bitmap( hbitmap ))
+    {
+        HBITMAP copy = unscaled_bitmap_copy( hbitmap );
+        INT ret;
+        if (!copy) return 0;
+        ret = get_di_bits( hdc, copy, startscan, lines, bits, info, coloruse, max_bits, max_info );
+        NtGdiDeleteObjectApp( copy );
+        return ret;
+    }
+    return get_di_bits( hdc, hbitmap, startscan, lines, bits, info, coloruse, max_bits, max_info );
+}
+
+static INT get_di_bits( HDC hdc, HBITMAP hbitmap, UINT startscan, UINT lines,
+                        void *bits, BITMAPINFO *info, UINT coloruse,
+                        UINT max_bits, UINT max_info )
 {
     DC * dc;
     BITMAPOBJ * bmp;

@@ -2863,6 +2863,27 @@ static DWORD get_subpixel_glyph_bitmap( FT_GlyphSlot glyph, FT_BBox bbox, UINT f
     return needed;
 }
 
+static DWORD get_glyph_bitmap_scaled( struct gdi_font *font, FT_Face ft_face, FT_BBox bbox, UINT format,
+                                      const FT_Matrix *matrices, GLYPHMETRICS *lpgm, DWORD buflen, BYTE *buf )
+{
+    switch (format)
+    {
+    case GGO_BITMAP:
+        return get_mono_glyph_bitmap( ft_face->glyph, bbox, font->fake_bold, matrices, buflen, buf );
+    case GGO_GRAY2_BITMAP:
+    case GGO_GRAY4_BITMAP:
+    case GGO_GRAY8_BITMAP:
+    case WINE_GGO_GRAY16_BITMAP:
+        return get_antialias_glyph_bitmap( ft_face->glyph, bbox, format, font->fake_bold, matrices, buflen, buf );
+    case WINE_GGO_HRGB_BITMAP:
+    case WINE_GGO_HBGR_BITMAP:
+    case WINE_GGO_VRGB_BITMAP:
+    case WINE_GGO_VBGR_BITMAP:
+        return get_subpixel_glyph_bitmap( ft_face->glyph, bbox, format, font->fake_bold, matrices, lpgm, buflen, buf );
+    }
+    return GDI_ERROR;
+}
+
 static unsigned int get_native_glyph_outline(FT_Outline *outline, unsigned int buflen, char *buf)
 {
     TTPOLYGONHEADER *pph;
@@ -3166,6 +3187,34 @@ static UINT freetype_get_glyph_outline( struct gdi_font *font, UINT glyph, UINT 
 
     bbox = get_transformed_bbox( &metrics, matrices );
     compute_metrics( font, bbox, &metrics, tategaki, vertical_metrics, matrices, lpgm, abc );
+
+    /* GDI scaling: a bitmap font drawn at a whole multiple of the program's size has its
+     * glyph's pixels repeated, as Windows does, to fill the box its metrics give it */
+    if (font->device_scale > 1 && font->scale_y > 1 && format != GGO_METRICS && format != GGO_NATIVE && format != GGO_BEZIER &&
+        ft_face->glyph->format == FT_GLYPH_FORMAT_BITMAP &&
+        ft_face->glyph->bitmap.pixel_mode == FT_PIXEL_MODE_MONO && ft_face->glyph->bitmap.width)
+    {
+        FT_Bitmap orig = ft_face->glyph->bitmap, *bm = &ft_face->glyph->bitmap;
+        UINT k = font->device_scale, x, y, pitch = ((orig.width * k + 31) >> 5) << 2;
+        BYTE *bits = calloc( pitch, orig.rows * k );
+        DWORD ret;
+
+        if (bits)
+        {
+            for (y = 0; y < orig.rows * k; y++)
+                for (x = 0; x < orig.width * k; x++)
+                    if (orig.buffer[(y / k) * orig.pitch + (x / k) / 8] & (0x80 >> ((x / k) % 8)))
+                        bits[y * pitch + x / 8] |= 0x80 >> (x % 8);
+            bm->buffer = bits;
+            bm->width = orig.width * k;
+            bm->rows = orig.rows * k;
+            bm->pitch = pitch;
+            ret = get_glyph_bitmap_scaled( font, ft_face, bbox, format, matrices, lpgm, buflen, buf );
+            *bm = orig;
+            free( bits );
+            return ret;
+        }
+    }
 
     switch (format)
     {

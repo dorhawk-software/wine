@@ -173,6 +173,7 @@ BOOL emulate_modeset = TRUE;
 BOOL emulate_modeset = FALSE;
 #endif
 BOOL decorated_mode = TRUE;
+BOOL gdi_scaling = FALSE;
 UINT64 thunk_lock_callback = 0;
 
 #define VIRTUAL_HMONITOR ((HMONITOR)(UINT_PTR)(0x10000 + 1))
@@ -6137,7 +6138,10 @@ void sysparams_init(void)
     {
         if (strstr( app_compat_flags, "HIGHDPIAWARE" )) NtUserSetProcessDpiAwarenessContext( NTUSER_DPI_SYSTEM_AWARE, 0 );
         if (strstr( app_compat_flags, "DPIUNAWARE" )) NtUserSetProcessDpiAwarenessContext( NTUSER_DPI_UNAWARE, 0 );
+        /* Windows' "System (Enhanced)": GDI draws at the display's DPI instead of being stretched */
+        if (strstr( app_compat_flags, "GDIDPISCALING" )) gdi_scaling = TRUE;
     }
+    if (getenv( "WINE_GDI_SCALING" )) gdi_scaling = atoi( getenv( "WINE_GDI_SCALING" ) ) != 0;
     free( app_compat_flags );
 }
 

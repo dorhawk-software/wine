@@ -93,6 +93,18 @@ BOOL clip_visrect( DC *dc, RECT *dst, const RECT *src )
 }
 
 /***********************************************************************
+ *           dc_scale_region
+ *
+ * GDI scaling: a new region with a scaled DC's region in the display's pixels (to_device)
+ * or in the program's own device coordinates.
+ */
+HRGN dc_scale_region( const DC *dc, HRGN hrgn, BOOL to_device )
+{
+    if (to_device) return map_dpi_region( hrgn, dc->scale_from, dc->scale_to );
+    return map_dpi_region( hrgn, dc->scale_to, dc->scale_from );
+}
+
+/***********************************************************************
  *           update_dc_clipping
  *
  * Update the DC and device clip regions when the ClipRgn or VisRgn have changed.
@@ -181,8 +193,17 @@ INT WINAPI NtGdiExtSelectClipRgn( HDC hdc, HRGN rgn, INT mode )
                 release_dc_ptr( dc );
                 return ERROR;
             }
-            mirror_region( mirrored, rgn, dc->attr->vis_rect.right - dc->attr->vis_rect.left );
+            mirror_region( mirrored, rgn, dc_is_scaled( dc ) ?
+                           GDI_ROUND( (dc->attr->vis_rect.right - dc->attr->vis_rect.left) / dc_scale( dc ) ) :
+                           dc->attr->vis_rect.right - dc->attr->vis_rect.left );
             rgn = mirrored;
+        }
+
+        if (dc_is_scaled( dc ))
+        {
+            HRGN scaled = dc_scale_region( dc, rgn, TRUE );
+            if (mirrored) NtGdiDeleteObjectApp( mirrored );
+            rgn = mirrored = scaled;
         }
 
         if (!dc->hClipRgn)
@@ -206,6 +227,21 @@ INT WINAPI NtGdiExtSelectClipRgn( HDC hdc, HRGN rgn, INT mode )
 void set_visible_region( HDC hdc, HRGN hrgn, const RECT *vis_rect, const RECT *device_rect,
                          struct window_surface *surface )
 {
+    static const struct ratio none;
+    set_visible_region_scaled( hdc, hrgn, vis_rect, device_rect, surface, none, none );
+}
+
+/***********************************************************************
+ *           set_visible_region_scaled
+ *
+ * GDI scaling: with a DPI in from, the DC draws into a surface in pixels of the DPI in to,
+ * while the program keeps its own coordinates. The visible rect keeps its origin on the
+ * screen (GetDCOrgEx) and takes its size in the surface's pixels.
+ */
+void set_visible_region_scaled( HDC hdc, HRGN hrgn, const RECT *vis_rect, const RECT *device_rect,
+                                struct window_surface *surface, struct ratio from, struct ratio to )
+{
+    RECT vis = *vis_rect, device = *device_rect;
     DC * dc;
 
     if (!(dc = get_dc_ptr( hdc ))) return;
@@ -216,10 +252,32 @@ void set_visible_region( HDC hdc, HRGN hrgn, const RECT *vis_rect, const RECT *d
     /* map region to DC coordinates */
     NtGdiOffsetRgn( hrgn, -vis_rect->left, -vis_rect->top );
 
+    if (from.num)
+    {
+        RECT size = {0, 0, vis.right - vis.left, vis.bottom - vis.top};
+        RECT offset = {device.left - vis.left, device.top - vis.top,
+                       device.right - vis.left, device.bottom - vis.top};
+        HRGN scaled;
+
+        size = map_dpi_rect( size, from, to );
+        offset = map_dpi_rect( offset, from, to );
+        vis.right = vis.left + size.right;
+        vis.bottom = vis.top + size.bottom;
+        SetRect( &device, vis.left + offset.left, vis.top + offset.top,
+                 vis.left + offset.right, vis.top + offset.bottom );
+        if (hrgn && (scaled = map_dpi_region( hrgn, from, to )))
+        {
+            NtGdiDeleteObjectApp( hrgn );
+            hrgn = scaled;
+        }
+    }
+
     if (dc->hVisRgn) NtGdiDeleteObjectApp( dc->hVisRgn );
     dc->dirty = 0;
-    dc->attr->vis_rect = *vis_rect;
-    dc->device_rect = *device_rect;
+    dc->attr->vis_rect = vis;
+    dc->device_rect = device;
+    dc->scale_from = from;
+    dc->scale_to = to;
     dc->hVisRgn = hrgn;
     dibdrv_set_window_surface( dc, surface );
     DC_UpdateXforms( dc );
@@ -244,6 +302,11 @@ INT WINAPI NtGdiOffsetClipRgn( HDC hdc, INT x, INT y )
         x = muldiv( x, dc->attr->vport_ext.cx, dc->attr->wnd_ext.cx );
         y = muldiv( y, dc->attr->vport_ext.cy, dc->attr->wnd_ext.cy );
         if (dc->attr->layout & LAYOUT_RTL) x = -x;
+        if (dc_is_scaled( dc ))
+        {
+            x = GDI_ROUND( x * dc_scale( dc ) );
+            y = GDI_ROUND( y * dc_scale( dc ) );
+        }
         ret = NtGdiOffsetRgn( dc->hClipRgn, x, y );
         update_dc_clipping( dc );
     }
@@ -438,6 +501,12 @@ INT WINAPI NtGdiGetRandomRgn( HDC hDC, HRGN hRgn, INT iCode )
         if (dc->hVisRgn)
         {
             NtGdiCombineRgn( hRgn, dc->hVisRgn, 0, RGN_COPY );
+            if (dc_is_scaled( dc ))
+            {
+                HRGN unscaled = dc_scale_region( dc, hRgn, FALSE );
+                NtGdiCombineRgn( hRgn, unscaled, 0, RGN_COPY );
+                NtGdiDeleteObjectApp( unscaled );
+            }
             /* On Windows NT/2000, the SYSRGN returned is in screen coordinates */
             if (RtlGetCurrentPeb()->OSPlatformId != VER_PLATFORM_WIN32s)
                 NtGdiOffsetRgn( hRgn, dc->attr->vis_rect.left, dc->attr->vis_rect.top );
@@ -457,6 +526,13 @@ INT WINAPI NtGdiGetRandomRgn( HDC hDC, HRGN hRgn, INT iCode )
     /* Wine extension */
     if (ret > 0 && (iCode & NTGDI_RGN_MIRROR_RTL) && (dc->attr->layout & LAYOUT_RTL))
         mirror_region( hRgn, hRgn, dc->attr->vis_rect.right - dc->attr->vis_rect.left );
+
+    if (ret > 0 && dc_is_scaled( dc ) && (iCode & ~(NTGDI_RGN_MIRROR_RTL | NTGDI_RGN_MONITOR_DPI)) != SYSRGN)
+    {
+        HRGN unscaled = dc_scale_region( dc, hRgn, FALSE );
+        NtGdiCombineRgn( hRgn, unscaled, 0, RGN_COPY );
+        NtGdiDeleteObjectApp( unscaled );
+    }
 
     release_dc_ptr( dc );
 

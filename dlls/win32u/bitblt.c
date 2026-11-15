@@ -316,8 +316,14 @@ BOOL nulldrv_StretchBlt( PHYSDEV dst_dev, struct bitblt_coords *dst,
     if (err == ERROR_TRANSFORM_NOT_SUPPORTED &&
         ((src->width != dst->width) || (src->height != dst->height)))
     {
+        int mode = dc_dst->attr->stretch_blt_mode;
+
         copy_bitmapinfo( src_info, dst_info );
-        err = stretch_bits( src_info, src, dst_info, dst, &bits, dc_dst->attr->stretch_blt_mode );
+        /* GDI scaling: a stretch the program didn't ask for (a blit into a DC drawn smaller
+         * than the program's pixels) is smoothed, rather than ANDing pixels together */
+        if ((dc_is_scaled( dc_dst ) && dc_scale( dc_dst ) < 1) || (dc_is_scaled( dc_src ) && dc_scale( dc_src ) > 1))
+            if (mode == BLACKONWHITE || mode == WHITEONBLACK) mode = HALFTONE;
+        err = stretch_bits( src_info, src, dst_info, dst, &bits, mode );
         if (!err) err = dst_dev->funcs->pPutImage( dst_dev, 0, dst_info, &bits, src, dst, rop );
     }
 

@@ -209,10 +209,14 @@ BOOL WINAPI NtGdiTransformPoints( HDC hdc, const POINT *points_in, POINT *points
                                   INT count, UINT mode )
 {
     DC *dc = get_dc_ptr( hdc );
+    double scale;
     int i = 0;
     BOOL ret = FALSE;
 
     if (!dc) return FALSE;
+
+    /* GDI scaling: the program sees its own device coordinates, not the display's */
+    scale = dc_is_scaled( dc ) ? dc_scale( dc ) : 1.0;
 
     switch (mode)
     {
@@ -221,12 +225,12 @@ BOOL WINAPI NtGdiTransformPoints( HDC hdc, const POINT *points_in, POINT *points
         {
             double x = points_in[i].x;
             double y = points_in[i].y;
-            points_out[i].x = GDI_ROUND( x * dc->xformWorld2Vport.eM11 +
-                                         y * dc->xformWorld2Vport.eM21 +
-                                         dc->xformWorld2Vport.eDx );
-            points_out[i].y = GDI_ROUND( x * dc->xformWorld2Vport.eM12 +
-                                         y * dc->xformWorld2Vport.eM22 +
-                                         dc->xformWorld2Vport.eDy );
+            points_out[i].x = GDI_ROUND( (x * dc->xformWorld2Vport.eM11 +
+                                          y * dc->xformWorld2Vport.eM21 +
+                                          dc->xformWorld2Vport.eDx) / scale );
+            points_out[i].y = GDI_ROUND( (x * dc->xformWorld2Vport.eM12 +
+                                          y * dc->xformWorld2Vport.eM22 +
+                                          dc->xformWorld2Vport.eDy) / scale );
         }
         ret = TRUE;
         break;
@@ -235,8 +239,8 @@ BOOL WINAPI NtGdiTransformPoints( HDC hdc, const POINT *points_in, POINT *points
         if (!dc->vport2WorldValid) break;
         for (i = 0; i < count; i++)
         {
-            double x = points_in[i].x;
-            double y = points_in[i].y;
+            double x = points_in[i].x * scale;
+            double y = points_in[i].y * scale;
             points_out[i].x = GDI_ROUND( x * dc->xformVport2World.eM11 +
                                          y * dc->xformVport2World.eM21 +
                                          dc->xformVport2World.eDx );

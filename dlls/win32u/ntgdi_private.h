@@ -64,6 +64,8 @@ typedef struct tagDC
     struct opengl_drawable *opengl_drawable; /* GL driver drawable for the DC */
 
     RECT         device_rect;      /* rectangle for the whole device */
+    struct ratio scale_from;       /* GDI scaling: the program's DPI (num 0 when not scaled) */
+    struct ratio scale_to;         /* GDI scaling: the DPI of the pixels the DC draws */
     int          pixel_format;     /* pixel format (for memory DCs) */
     UINT         aa_flags;         /* anti-aliasing flags to pass to GetGlyphOutline for current font */
     WCHAR        display[CCHDEVICENAME]; /* Display name when created for a specific display device */
@@ -139,6 +141,9 @@ typedef struct tagBITMAPOBJ
     DIBSECTION            dib;
     SIZE                  size;   /* For SetBitmapDimension() */
     RGBQUAD              *color_table;  /* DIB color table if <= 8bpp (always 1 << bpp in size) */
+    struct ratio          scale_from;   /* GDI scaling: the program's DPI (num 0 when not scaled) */
+    struct ratio          scale_to;     /* GDI scaling: the DPI of the bitmap's pixels */
+    SIZE                  program_size; /* GDI scaling: the size the program asked for */
 } BITMAPOBJ;
 
 static inline BOOL is_bitmapobj_dib( const BITMAPOBJ *bmp )
@@ -165,6 +170,19 @@ extern BOOL clip_device_rect( DC *dc, RECT *dst, const RECT *src );
 extern BOOL clip_visrect( DC *dc, RECT *dst, const RECT *src );
 extern void set_visible_region( HDC hdc, HRGN hrgn, const RECT *vis_rect,
                                 const RECT *device_rect, struct window_surface *surface );
+extern void set_visible_region_scaled( HDC hdc, HRGN hrgn, const RECT *vis_rect, const RECT *device_rect,
+                                       struct window_surface *surface, struct ratio from, struct ratio to );
+
+/* GDI scaling: a window DC draws at its display's DPI while the program sees its own */
+static inline BOOL dc_is_scaled( const DC *dc ) { return dc->scale_from.num != 0; }
+static inline double dc_scale( const DC *dc )
+{
+    return (double)dc->scale_to.num * dc->scale_from.den / ((double)dc->scale_to.den * dc->scale_from.num);
+}
+extern HRGN dc_scale_region( const DC *dc, HRGN hrgn, BOOL to_device );
+extern BOOL is_scaled_bitmap( HBITMAP hbitmap );
+extern HBITMAP unscaled_bitmap_copy( HBITMAP hbitmap );
+extern BOOL copy_bitmap_scaled( HBITMAP src, HBITMAP dst );
 extern void update_dc_clipping( DC * dc );
 
 /* Return the total DC region (if any) */
@@ -285,6 +303,7 @@ struct gdi_font
     UINT                   aa_flags;
     ULONG                  ttc_item_offset;    /* 0 if font is not a part of TrueType collection */
     UINT                   can_use_bitmap : 1;
+    UINT                   device_scale : 8;  /* GDI scaling: whole-number scale for bitmap fonts */
     UINT                   fake_italic : 1;
     UINT                   fake_bold : 1;
     UINT                   scalable : 1;

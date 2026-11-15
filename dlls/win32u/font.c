@@ -2753,6 +2753,7 @@ static void add_child_font( struct gdi_font *font, const WCHAR *family_name )
     if (!(child = create_gdi_font( face, family_name, &font->lf ))) return;
     child->matrix = font->matrix;
     child->can_use_bitmap = font->can_use_bitmap;
+    child->device_scale = font->device_scale;
     child->scale_y = font->scale_y;
     child->aveWidth = font->aveWidth;
     child->charset = font->charset;
@@ -2813,16 +2814,17 @@ static unsigned int unused_font_count;
 #define UNUSED_CACHE_SIZE 10
 
 static BOOL fontcmp( const struct gdi_font *font, DWORD hash, const LOGFONTW *lf,
-                     const FMAT2 *matrix, BOOL can_use_bitmap )
+                     const FMAT2 *matrix, BOOL can_use_bitmap, UINT device_scale )
 {
     if (font->hash != hash) return TRUE;
+    if (font->device_scale != device_scale) return TRUE;
     if (memcmp( &font->matrix, matrix, sizeof(*matrix))) return TRUE;
     if (memcmp( &font->lf, lf, offsetof(LOGFONTW, lfFaceName))) return TRUE;
     if (!font->can_use_bitmap != !can_use_bitmap) return TRUE;
     return facename_compare( font->lf.lfFaceName, lf->lfFaceName, -1 );
 }
 
-static DWORD hash_font( const LOGFONTW *lf, const FMAT2 *matrix, BOOL can_use_bitmap )
+static DWORD hash_font( const LOGFONTW *lf, const FMAT2 *matrix, BOOL can_use_bitmap, UINT device_scale )
 {
     DWORD hash = 0, *ptr, two_chars;
     WORD *pwc;
@@ -2844,6 +2846,7 @@ static DWORD hash_font( const LOGFONTW *lf, const FMAT2 *matrix, BOOL can_use_bi
         if(!*pwc) break;
     }
     hash ^= !can_use_bitmap;
+    hash ^= device_scale << 8;
     return hash;
 }
 
@@ -2852,20 +2855,21 @@ static void cache_gdi_font( struct gdi_font *font )
     static DWORD cache_num = 1;
 
     font->cache_num = cache_num++;
-    font->hash = hash_font( &font->lf, &font->matrix, font->can_use_bitmap );
+    font->hash = hash_font( &font->lf, &font->matrix, font->can_use_bitmap, font->device_scale );
     list_add_head( &gdi_font_list, &font->entry );
     TRACE( "font %p\n", font );
 }
 
-static struct gdi_font *find_cached_gdi_font( const LOGFONTW *lf, const FMAT2 *matrix, BOOL can_use_bitmap )
+static struct gdi_font *find_cached_gdi_font( const LOGFONTW *lf, const FMAT2 *matrix, BOOL can_use_bitmap,
+                                              UINT device_scale )
 {
     struct gdi_font *font;
-    DWORD hash = hash_font( lf, matrix, can_use_bitmap );
+    DWORD hash = hash_font( lf, matrix, can_use_bitmap, device_scale );
 
     /* try the in-use list */
     LIST_FOR_EACH_ENTRY( font, &gdi_font_list, struct gdi_font, entry )
     {
-        if (fontcmp( font, hash, lf, matrix, can_use_bitmap )) continue;
+        if (fontcmp( font, hash, lf, matrix, can_use_bitmap, device_scale )) continue;
         list_remove( &font->entry );
         list_add_head( &gdi_font_list, &font->entry );
         if (!font->refcount++)
@@ -4421,7 +4425,7 @@ static void get_nearest_charset( const WCHAR *family_name, struct gdi_font_face 
     csi->ciCharset = DEFAULT_CHARSET;
 }
 
-static struct gdi_font *select_font( LOGFONTW *lf, FMAT2 dcmat, BOOL can_use_bitmap )
+static struct gdi_font *select_font( LOGFONTW *lf, FMAT2 dcmat, BOOL can_use_bitmap, UINT device_scale )
 {
     struct gdi_font *font;
     struct gdi_font_face *face;
@@ -4439,7 +4443,7 @@ static struct gdi_font *select_font( LOGFONTW *lf, FMAT2 dcmat, BOOL can_use_bit
     if (!facename_compare( lf->lfFaceName, symbolW, -1 )) lf->lfCharSet = SYMBOL_CHARSET;
 
     /* check the cache first */
-    if ((font = find_cached_gdi_font( lf, &dcmat, can_use_bitmap )))
+    if ((font = find_cached_gdi_font( lf, &dcmat, can_use_bitmap, device_scale )))
     {
         TRACE( "returning cached gdiFont(%p)\n", font );
         return font;
@@ -4455,6 +4459,7 @@ static struct gdi_font *select_font( LOGFONTW *lf, FMAT2 dcmat, BOOL can_use_bit
     font->use_logfont_name = substituted;
     font->matrix = dcmat;
     font->can_use_bitmap = can_use_bitmap;
+    font->device_scale = device_scale;
     if (!csi.fs.fsCsb[0]) get_nearest_charset( face->family->family_name, face, &csi );
     font->charset = csi.ciCharset;
     font->codepage = csi.ciACP;
@@ -4469,6 +4474,8 @@ static struct gdi_font *select_font( LOGFONTW *lf, FMAT2 dcmat, BOOL can_use_bit
         INT scale, scaled_height, diff;
         struct gdi_font *cachedfont;
 
+        if (device_scale > 1) height /= (INT)device_scale;
+
         if (height > 0)
             diff = height - (signed int)face->size.height;
         else
@@ -4482,7 +4489,7 @@ static struct gdi_font *select_font( LOGFONTW *lf, FMAT2 dcmat, BOOL can_use_bit
         dcmat.eM11 = dcmat.eM22 = 1.0;
         /* As we changed the matrix, we need to search the cache for the font again,
          * otherwise we might explode the cache. */
-        if ((cachedfont = find_cached_gdi_font( lf, &dcmat, can_use_bitmap )))
+        if ((cachedfont = find_cached_gdi_font( lf, &dcmat, can_use_bitmap, device_scale )))
         {
             TRACE("Found cached font after non-scalable matrix rescale!\n");
             free_gdi_font( font );
@@ -4498,6 +4505,8 @@ static struct gdi_font *select_font( LOGFONTW *lf, FMAT2 dcmat, BOOL can_use_bit
         if (scale > 2 && scaled_height - height > face->size.height / 4) scale--;
         /* The jump between unscaled and doubled is delayed by 1 */
         else if (scale == 2 && scaled_height - height > (face->size.height / 4 - 1)) scale--;
+        /* GDI scaling: the size is the program's, drawn in whole multiples on the display */
+        if (device_scale > 1) scale *= device_scale;
         font->scale_y = scale;
         TRACE("font scale y: %d\n", font->scale_y);
     }
@@ -4532,6 +4541,7 @@ static HFONT font_SelectFont( PHYSDEV dev, HFONT hfont, UINT *aa_flags )
         LOGFONTW lf;
         FMAT2 dcmat;
         BOOL can_use_bitmap = !!(NtGdiGetDeviceCaps( dc->hSelf, TEXTCAPS ) & TC_RA_ABLE);
+        UINT device_scale = 1;
 
         NtGdiExtGetObjectW( hfont, sizeof(lf), &lf );
         switch (lf.lfQuality)
@@ -4579,11 +4589,27 @@ static HFONT font_SelectFont( PHYSDEV dev, HFONT hfont, UINT *aa_flags )
                 lf.lfWidth *= fabs(dc->xformWorld2Vport.eM22);
             }
         }
+        if (dc_is_scaled( dc ))
+        {
+            /* GDI scaling: bitmap fonts scale in whole numbers; a font of the default height
+             * (0) is scaled with the matrix, as its height can't be */
+            double scale = dc_scale( dc );
+            device_scale = max( 1, (int)floor( scale + 0.5 ) );
+            /* a bitmap font can't be drawn smaller than it is: use an outline font instead */
+            if (scale < 0.75) can_use_bitmap = FALSE;
+            if (!lf.lfHeight && device_scale > 1)
+            {
+                dcmat.eM11 *= device_scale;
+                dcmat.eM12 *= device_scale;
+                dcmat.eM21 *= device_scale;
+                dcmat.eM22 *= device_scale;
+            }
+        }
         TRACE( "DC transform %f %f %f %f\n", dcmat.eM11, dcmat.eM12, dcmat.eM21, dcmat.eM22 );
 
         pthread_mutex_lock( &font_lock );
 
-        font = select_font( &lf, dcmat, can_use_bitmap );
+        font = select_font( &lf, dcmat, can_use_bitmap, device_scale );
 
         if (font)
         {
@@ -4594,6 +4620,18 @@ static HFONT font_SelectFont( PHYSDEV dev, HFONT hfont, UINT *aa_flags )
                     *aa_flags = subpixel_orientation;
                 else
                     *aa_flags = font_smoothing;
+            }
+            /* GDI scaling: text drawn in 1x pixels (not a Retina display's) is rendered for an
+             * LCD's subpixels, as ClearType does on such a display on Windows. Grey smoothing keeps
+             * to the fonts' gasp tables, which ask Tahoma and Segoe UI at menu sizes for none, and
+             * leaves their stems jagged. A scaled DC draws in its display's pixels; any other DC
+             * in the program's own, which a program that isn't DPI aware has at 96 DPI on any
+             * display (native on a 1x one). */
+            if (gdi_scaling && *aa_flags != GGO_BITMAP)
+            {
+                struct ratio pixels = dc_is_scaled( dc ) ? dc->scale_to : get_thread_dpi();
+                if (pixels.num && pixels.num <= 120 * pixels.den)
+                    *aa_flags = (subpixel_orientation == WINE_GGO_HBGR_BITMAP) ? WINE_GGO_HBGR_BITMAP : WINE_GGO_HRGB_BITMAP;
             }
             *aa_flags = font_funcs->get_aa_flags( font, *aa_flags, antialias_fakes );
         }

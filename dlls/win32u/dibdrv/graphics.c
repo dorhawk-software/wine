@@ -158,6 +158,11 @@ static void add_pen_lines_bounds( dibdrv_physdev *dev, int count, const POINT *p
         }
     }
 
+    /* GDI scaling: a cosmetic pen's pixels are blocks of the display's pixels */
+    if (!dev->pen_uses_region && dc_is_scaled( get_physdev_dc( &dev->dev ) ) &&
+        dc_scale( get_physdev_dc( &dev->dev ) ) > 1)
+        width = (int)ceil( dc_scale( get_physdev_dc( &dev->dev ) ) );
+
     while (count-- > 0)
     {
         rect.left   = points->x - width;
@@ -1429,6 +1434,19 @@ BOOL dibdrv_Rectangle( PHYSDEV dev, INT left, INT top, INT right, INT bottom )
         }
         ret = pen_region( pdev, outline );
         NtGdiDeleteObjectApp( outline );
+    }
+    else if (dc_is_scaled( dc ) && dc_scale( dc ) > 1 && pdev->pen_width)
+    {
+        /* GDI scaling: the border is a block of the display's pixels wide */
+        double scale = dc_scale( dc );
+        RECT inner;
+        inner.left   = (int)floor( (floor( (rect.left + 0.5) / scale ) + 1) * scale + 0.5 );
+        inner.top    = (int)floor( (floor( (rect.top + 0.5) / scale ) + 1) * scale + 0.5 );
+        inner.right  = (int)floor( floor( (rect.right + 0.5) / scale ) * scale + 0.5 );
+        inner.bottom = (int)floor( floor( (rect.bottom + 0.5) / scale ) * scale + 0.5 );
+        ret = TRUE;
+        if (inner.left < inner.right && inner.top < inner.bottom)
+            ret = brush_rect( pdev, &pdev->brush, &inner, pdev->clip );
     }
     else
     {

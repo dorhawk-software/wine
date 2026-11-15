@@ -148,6 +148,7 @@ struct scaled_surface
     struct window_surface *target_surface;
     struct ratio dpi_from;
     struct ratio dpi_to;
+    BOOL gdi_scaled;    /* GDI scaling: DCs draw into the target surface at its DPI */
 };
 
 static struct scaled_surface *get_scaled_surface( struct window_surface *window_surface )
@@ -254,6 +255,7 @@ static struct window_surface *scaled_surface_create( HWND hwnd, const RECT *surf
     {
         surface = get_scaled_surface( window_surface );
         surface->dpi_from = dpi_from;
+        surface->gdi_scaled = gdi_scaling && !(NtUserGetWindowLongW( hwnd, GWL_EXSTYLE ) & WS_EX_LAYERED);
         scaled_surface_set_target( surface, target_surface, dpi_to );
     }
 
@@ -613,6 +615,24 @@ void window_surface_unlock( struct window_surface *surface )
     pthread_mutex_unlock( &surface->mutex );
 }
 
+/* GDI scaling: the window's DCs draw into the target surface, which is the one to flush */
+static struct window_surface *get_gdi_scaled_target( struct window_surface *surface, struct ratio *from, struct ratio *to )
+{
+    struct scaled_surface *scaled;
+
+    if (!surface || surface == &dummy_surface || surface->funcs != &scaled_surface_funcs) return NULL;
+    scaled = get_scaled_surface( surface );
+    if (!scaled->gdi_scaled) return NULL;
+    if (from) *from = scaled->dpi_from;
+    if (to) *to = scaled->dpi_to;
+    return scaled->target_surface;
+}
+
+BOOL is_gdi_scaled_surface( struct window_surface *surface )
+{
+    return get_gdi_scaled_target( surface, NULL, NULL ) != NULL;
+}
+
 void window_surface_flush( struct window_surface *surface )
 {
     char color_buf[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
@@ -621,6 +641,31 @@ void window_surface_flush( struct window_surface *surface )
     BITMAPINFO *shape_info = (BITMAPINFO *)shape_buf;
     RECT dirty = surface->rect, bounds;
     void *color_bits;
+    struct window_surface *target;
+    struct ratio from, to;
+
+    if ((target = get_gdi_scaled_target( surface, &from, &to )))
+    {
+        /* what reaches this surface itself (an expose, a new shape) goes on to the target */
+        HRGN shape = 0;
+
+        window_surface_lock( surface );
+        bounds = surface->bounds;
+        reset_bounds( &surface->bounds );
+        if (surface->shape_region) shape = map_dpi_region( surface->shape_region, from, to );
+        window_surface_unlock( surface );
+
+        if (!IsRectEmpty( &bounds ))
+        {
+            bounds = map_dpi_rect( bounds, from, to );
+            window_surface_lock( target );
+            add_bounds_rect( &target->bounds, &bounds );
+            window_surface_unlock( target );
+        }
+        window_surface_set_shape( target, shape ); /* flushes the target */
+        if (shape) NtGdiDeleteObjectApp( shape );
+        return;
+    }
 
     window_surface_lock( surface );
 
@@ -817,7 +862,8 @@ static void dump_rdw_flags(UINT flags)
  */
 static void update_visible_region( struct dce *dce )
 {
-    struct window_surface *surface = NULL;
+    struct window_surface *surface = NULL, *target;
+    struct ratio from, to;
     NTSTATUS status;
     HRGN vis_rgn = 0;
     HWND top_win = 0;
@@ -880,7 +926,10 @@ static void update_visible_region( struct dce *dce )
     }
 
     if (!surface) SetRectEmpty( &top_rect );
-    set_visible_region( dce->hdc, vis_rgn, &win_rect, &top_rect, surface );
+    if ((target = get_gdi_scaled_target( surface, &from, &to )))
+        set_visible_region_scaled( dce->hdc, vis_rgn, &win_rect, &top_rect, target, from, to );
+    else
+        set_visible_region( dce->hdc, vis_rgn, &win_rect, &top_rect, surface );
     if (surface) window_surface_release( surface );
 }
 

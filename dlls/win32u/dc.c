@@ -149,6 +149,30 @@ static void free_dc_attr( DC_ATTR *dc_attr )
 
 
 /***********************************************************************
+ *           apply_device_scale
+ *
+ * GDI scaling: a scaled window DC draws in its display's pixels. Its world-to-device
+ * transform ends with the scale, so everything drawn, fonts too, is drawn at the display's
+ * DPI; what the program reads back is taken out of it again (see NtGdiTransformPoints).
+ */
+static BOOL DC_InvertXform( const XFORM *xformSrc, XFORM *xformDest );
+
+static void apply_device_scale( DC *dc )
+{
+    double scale;
+
+    if (!dc_is_scaled( dc )) return;
+    scale = dc_scale( dc );
+    dc->xformWorld2Vport.eM11 *= scale;
+    dc->xformWorld2Vport.eM12 *= scale;
+    dc->xformWorld2Vport.eM21 *= scale;
+    dc->xformWorld2Vport.eM22 *= scale;
+    dc->xformWorld2Vport.eDx  *= scale;
+    dc->xformWorld2Vport.eDy  *= scale;
+    dc->vport2WorldValid = DC_InvertXform( &dc->xformWorld2Vport, &dc->xformVport2World );
+}
+
+/***********************************************************************
  *           set_initial_dc_state
  */
 static void set_initial_dc_state( DC *dc )
@@ -194,6 +218,7 @@ static void set_initial_dc_state( DC *dc )
     dc->xformWorld2Vport    = dc->xformWorld2Wnd;
     dc->xformVport2World    = dc->xformWorld2Wnd;
     dc->vport2WorldValid    = TRUE;
+    apply_device_scale( dc );
 
     reset_bounds( &dc->bounds );
 }
@@ -465,6 +490,7 @@ void DC_UpdateXforms( DC *dc )
     /* Create inverse of world-to-viewport transformation */
     dc->vport2WorldValid = DC_InvertXform( &dc->xformWorld2Vport,
         &dc->xformVport2World );
+    apply_device_scale( dc );
 
     /* Reselect the font and pen back into the dc so that the size
        gets updated. */
@@ -1208,10 +1234,21 @@ BOOL WINAPI NtGdiGetTransform( HDC hdc, DWORD which, XFORM *xform )
 
     case 0x204:
         *xform = dc->xformWorld2Vport;
+        if (dc_is_scaled( dc ))
+        {
+            double scale = dc_scale( dc );
+            xform->eM11 /= scale; xform->eM12 /= scale; xform->eM21 /= scale;
+            xform->eM22 /= scale; xform->eDx /= scale; xform->eDy /= scale;
+        }
         break;
 
     case 0x402:
         *xform = dc->xformVport2World;
+        if (dc_is_scaled( dc ))
+        {
+            double scale = dc_scale( dc );
+            xform->eM11 *= scale; xform->eM12 *= scale; xform->eM21 *= scale; xform->eM22 *= scale;
+        }
         break;
 
     default:

@@ -804,6 +804,9 @@ static BOOL solid_pen_line_region( dibdrv_physdev *pdev, POINT *start, POINT *en
     return TRUE;
 }
 
+static void scaled_cosmetic_line( dibdrv_physdev *pdev, double scale, const POINT *start, const POINT *end,
+                                  BOOL dashed, DWORD and, DWORD xor );
+
 static BOOL solid_pen_lines(dibdrv_physdev *pdev, int num, POINT *pts, BOOL close, HRGN region)
 {
     DC *dc = get_physdev_dc( &pdev->dev );
@@ -824,6 +827,14 @@ static BOOL solid_pen_lines(dibdrv_physdev *pdev, int num, POINT *pts, BOOL clos
 
         color = get_pixel_color( dc, &pdev->dib, pdev->pen_brush.colorref, TRUE );
         calc_and_xor_masks( dc->attr->rop_mode, color, &and, &xor );
+
+        if (dc_is_scaled( dc ) && dc_scale( dc ) > 1)
+        {
+            double scale = dc_scale( dc );
+            for (i = 0; i < num - 1; i++) scaled_cosmetic_line( pdev, scale, pts + i, pts + i + 1, FALSE, and, xor );
+            if (close) scaled_cosmetic_line( pdev, scale, pts + num - 1, pts, FALSE, and, xor );
+            return TRUE;
+        }
 
         for (i = 0; i < num - 1; i++)
             if (!solid_pen_line( pdev, pts + i, pts + i + 1, and, xor ))
@@ -857,6 +868,93 @@ static inline void skip_dash(dibdrv_physdev *pdev, unsigned int skip)
         pdev->dash_pos.mark = !pdev->dash_pos.mark;
     }
     while (skip);
+}
+
+/* GDI scaling: a cosmetic pen is one of the program's pixels wide, so in a scaled DC each of
+ * the line's pixels, worked out in the program's pixels, is drawn as the block of the display's
+ * pixels it covers. Lines then stay solid and meet rectangles as they do unscaled. */
+static inline int scaled_coord( double scale, int x )
+{
+    return (int)floor( x * scale + 0.5 );
+}
+
+static inline int unscaled_coord( double scale, int x )
+{
+    return (int)floor( (x + 0.5) / scale );
+}
+
+static void scaled_block( dibdrv_physdev *pdev, double scale, int x, int y, int x2, int y2, DWORD and, DWORD xor )
+{
+    struct clipped_rects clipped_rects;
+    RECT rect;
+
+    rect.left   = scaled_coord( scale, x );
+    rect.top    = scaled_coord( scale, y );
+    rect.right  = max( rect.left + 1, scaled_coord( scale, x2 ) );
+    rect.bottom = max( rect.top + 1, scaled_coord( scale, y2 ) );
+    if (!get_clipped_rects( &pdev->dib, &rect, pdev->clip, &clipped_rects )) return;
+    pdev->dib.funcs->solid_rects( &pdev->dib, clipped_rects.count, clipped_rects.rects, and, xor );
+    free_clipped_rects( &clipped_rects );
+}
+
+static void scaled_cosmetic_line( dibdrv_physdev *pdev, double scale, const POINT *start, const POINT *end,
+                                  BOOL dashed, DWORD and, DWORD xor )
+{
+    int x1 = unscaled_coord( scale, start->x ), y1 = unscaled_coord( scale, start->y );
+    int x2 = unscaled_coord( scale, end->x ), y2 = unscaled_coord( scale, end->y );
+    int dx = abs( x2 - x1 ), dy = abs( y2 - y1 ), sx = x1 < x2 ? 1 : -1, sy = y1 < y2 ? 1 : -1;
+    int err = dx - dy, x = x1, y = y1;
+
+    if (!dashed && (y1 == y2 || x1 == x2))
+    {
+        /* the last pixel isn't drawn */
+        if (y1 == y2 && x1 != x2) scaled_block( pdev, scale, min( x1, x2 + 1 ), y1, max( x1 + 1, x2 ), y1 + 1, and, xor );
+        else if (x1 == x2 && y1 != y2) scaled_block( pdev, scale, x1, min( y1, y2 + 1 ), x1 + 1, max( y1 + 1, y2 ), and, xor );
+        return;
+    }
+
+    if (!dashed)
+    {
+        /* a slanted line: its course in the display's pixels, each point a block wide */
+        int block = max( 1, (int)floor( scale + 0.5 ) );
+        int px = scaled_coord( scale, x1 ), py = scaled_coord( scale, y1 );
+        int qx = scaled_coord( scale, x2 ), qy = scaled_coord( scale, y2 );
+        int ddx = abs( qx - px ), ddy = abs( qy - py ), stx = px < qx ? 1 : -1, sty = py < qy ? 1 : -1;
+        int e = ddx - ddy;
+
+        while (px != qx || py != qy)
+        {
+            int e2 = 2 * e;
+            struct clipped_rects clipped_rects;
+            RECT rect = { px, py, px + block, py + block };
+
+            if (get_clipped_rects( &pdev->dib, &rect, pdev->clip, &clipped_rects ))
+            {
+                pdev->dib.funcs->solid_rects( &pdev->dib, clipped_rects.count, clipped_rects.rects, and, xor );
+                free_clipped_rects( &clipped_rects );
+            }
+            if (e2 > -ddy) { e -= ddy; px += stx; }
+            if (e2 < ddx) { e += ddx; py += sty; }
+        }
+        return;
+    }
+
+    while (x != x2 || y != y2)
+    {
+        if (dashed)
+        {
+            rop_mask mask = pdev->dash_masks[pdev->dash_pos.mark];
+            skip_dash( pdev, 1 );
+            scaled_block( pdev, scale, x, y, x + 1, y + 1, mask.and, mask.xor );
+        }
+        else scaled_block( pdev, scale, x, y, x + 1, y + 1, and, xor );
+
+        {
+            int e2 = 2 * err;
+            if (e2 > -dy) { err -= dy; x += sx; }
+            if (e2 < dx) { err += dx; y += sy; }
+        }
+    }
 }
 
 static void dashed_pen_line_callback(dibdrv_physdev *pdev, INT x, INT y)
@@ -1236,6 +1334,14 @@ static BOOL dashed_pen_lines(dibdrv_physdev *pdev, int num, POINT *pts, BOOL clo
         get_color_masks( dc, &pdev->dib, dc->attr->rop_mode, pdev->pen_brush.colorref,
                          pdev->pen_is_ext ? TRANSPARENT : dc->attr->background_mode,
                          &pdev->dash_masks[1], &pdev->dash_masks[0] );
+
+        if (dc_is_scaled( dc ) && dc_scale( dc ) > 1)
+        {
+            double scale = dc_scale( dc );
+            for (i = 0; i < num - 1; i++) scaled_cosmetic_line( pdev, scale, pts + i, pts + i + 1, TRUE, 0, 0 );
+            if (close) scaled_cosmetic_line( pdev, scale, pts + num - 1, pts, TRUE, 0, 0 );
+            return TRUE;
+        }
 
         for (i = 0; i < num - 1; i++)
             if (!dashed_pen_line( pdev, pts + i, pts + i + 1 ))
@@ -1768,6 +1874,8 @@ static inline int get_pen_device_width( DC *dc, int width )
     pts[1].x = width;
     lp_to_dp( dc, pts, 2 );
     width = floor( hypot( pts[1].x - pts[0].x, pts[1].y - pts[0].y ));
+    /* GDI scaling: a pen one of the program's pixels wide is drawn as a cosmetic pen, in blocks */
+    if (dc_is_scaled( dc ) && width / dc_scale( dc ) < 1.5) return 1;
     return max( width, 1 );
 }
 

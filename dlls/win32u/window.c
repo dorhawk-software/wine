@@ -2457,7 +2457,10 @@ static BOOL apply_window_pos( HWND hwnd, HWND insert_after, UINT swp_flags, stru
                 RECT rects[2] = {valid_rects[0], valid_rects[1]};
                 valid_rects = rects;
 
-                if (old_surface != new_surface)
+                if (old_surface != new_surface && (is_gdi_scaled_surface( old_surface ) || is_gdi_scaled_surface( new_surface )))
+                    /* GDI scaling: the window's pixels are of another density now, so it is drawn again */
+                    NtUserRedrawWindow( hwnd, NULL, 0, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN );
+                else if (old_surface != new_surface)
                     move_window_bits_surface( hwnd, &new_rects->window, old_surface, &old_rects.visible, valid_rects );
                 else
                 {
