@@ -382,18 +382,34 @@ static int link_window( struct window *win, struct window *previous )
     return old_prev != win->entry.prev;
 }
 
-static void set_window_monitor_dpi( struct window *win )
+/* set the monitor dpi of a window and of its children, which take their parent's */
+static void set_window_tree_dpi( struct window *win, struct ratio dpi, struct ratio raw_dpi )
 {
-    struct monitor_info *info;
-
-    if (!(info = get_monitor_from_rect( win->desktop->winstation, &win->window_rect, 0 ))) return;
+    struct window *child;
 
     SHARED_WRITE_BEGIN( win->shared, window_shm_t )
     {
-        shared->dpi     = info->dpi;
-        shared->raw_dpi = info->raw_dpi;
+        shared->dpi     = dpi;
+        shared->raw_dpi = raw_dpi;
     }
     SHARED_WRITE_END;
+
+    LIST_FOR_EACH_ENTRY( child, &win->children, struct window, entry )
+        set_window_tree_dpi( child, dpi, raw_dpi );
+}
+
+static void set_window_monitor_dpi( struct window *win )
+{
+    struct monitor_info *info;
+    struct ratio dpi = win->shared->dpi, raw_dpi = win->shared->raw_dpi;
+
+    if (!(info = get_monitor_from_rect( win->desktop->winstation, &win->window_rect, 0 ))) return;
+
+    /* a window moved to a monitor with another dpi takes its children with it: they would
+     * otherwise keep the dpi of the monitor they were created on, and map points with it */
+    if (dpi.num * info->dpi.den != info->dpi.num * dpi.den ||
+        raw_dpi.num * info->raw_dpi.den != info->raw_dpi.num * raw_dpi.den)
+        set_window_tree_dpi( win, info->dpi, info->raw_dpi );
 }
 
 /* attach or detach the parent window thread input if necessary */
