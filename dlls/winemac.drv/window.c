@@ -79,6 +79,27 @@ static struct macdrv_window_features get_window_features_for_style(DWORD style, 
 }
 
 /***********************************************************************
+ *              region_covers_window
+ *
+ * Whether the window's region is one rectangle that covers the whole window. Ribbon libraries set
+ * such a region: it doesn't change the window's outline, so it isn't a shape.
+ */
+static BOOL region_covers_window(HWND hwnd, const RECT *window)
+{
+    HRGN region = NtGdiCreateRectRgn(0, 0, 0, 0);
+    RECT box;
+    BOOL ret = FALSE;
+
+    if (!region) return FALSE;
+    if (NtUserGetWindowRgnEx(hwnd, region, 0) != ERROR && NtGdiGetRgnBox(region, &box) == SIMPLEREGION)
+        ret = box.left <= 0 && box.top <= 0 && box.right >= window->right - window->left &&
+              box.bottom >= window->bottom - window->top;
+    NtGdiDeleteObjectApp(region);
+    return ret;
+}
+
+
+/***********************************************************************
  *              get_cocoa_window_features
  */
 static struct macdrv_window_features get_cocoa_window_features(struct macdrv_win_data *data, DWORD style, DWORD ex_style)
@@ -90,7 +111,9 @@ static struct macdrv_window_features get_cocoa_window_features(struct macdrv_win
     {
         /* The app draws its own frame, but a sizing border still lets the user resize the
          * window: let macOS and its window tools resize it too. */
-        if ((style & WS_THICKFRAME) && !data->shaped) wf.resizable = TRUE;
+        if ((style & WS_THICKFRAME) &&
+            (!data->shaped || region_covers_window(data->hwnd, &data->rects.window)))
+            wf.resizable = TRUE;
         return wf;
     }
 
