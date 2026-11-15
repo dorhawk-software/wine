@@ -2400,6 +2400,38 @@ static LRESULT handle_nc_mouse_leave( HWND hwnd )
 }
 
 
+/* The sideways wheel (WM_MOUSEHWHEEL) came with Windows Vista, and many apps from before it, or
+ * built on libraries from before it, never handle it: a sideways swipe on a trackpad does nothing
+ * in them. Most of them scroll sideways with Shift and the wheel instead. So when no window from
+ * the one that got the sideways wheel up to its top-level window took it, give that window Shift
+ * and the wheel, turned the other way (wheel up is left, sideways wheel up is right). An app that
+ * handles the sideways wheel anywhere in the chain never sees the difference. */
+static LRESULT default_hwheel( HWND hwnd, WPARAM wparam, LPARAM lparam )
+{
+    struct user_thread_info *info = get_user_thread_info();
+    BOOL outermost = !info->hwheel_depth;
+    LRESULT result = 0;
+
+    if (outermost) info->hwheel_unhandled = FALSE;
+    if (get_window_long( hwnd, GWL_STYLE ) & WS_CHILD)
+    {
+        info->hwheel_depth++;
+        result = send_message( get_parent( hwnd ), WM_MOUSEHWHEEL, wparam, lparam );
+        info->hwheel_depth--;
+    }
+    else info->hwheel_unhandled = TRUE;
+
+    if (outermost && info->hwheel_unhandled)
+    {
+        info->hwheel_unhandled = FALSE;
+        TRACE( "%p doesn't take the sideways wheel: giving it Shift and the wheel\n", hwnd );
+        result = send_message( hwnd, WM_MOUSEWHEEL,
+                               MAKEWPARAM( GET_KEYSTATE_WPARAM( wparam ) | MK_SHIFT,
+                                           -GET_WHEEL_DELTA_WPARAM( wparam ) ), lparam );
+    }
+    return result;
+}
+
 LRESULT default_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, BOOL ansi )
 {
     LRESULT result = 0;
@@ -2588,9 +2620,12 @@ LRESULT default_window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, 
         break;
 
     case WM_MOUSEWHEEL:
-    case WM_MOUSEHWHEEL:
         if (get_window_long( hwnd, GWL_STYLE ) & WS_CHILD)
             result = send_message( get_parent( hwnd ), msg, wparam, lparam );
+        break;
+
+    case WM_MOUSEHWHEEL:
+        result = default_hwheel( hwnd, wparam, lparam );
         break;
 
     case WM_ERASEBKGND:
