@@ -100,6 +100,55 @@ static BOOL region_covers_window(HWND hwnd, const RECT *window)
 
 
 /***********************************************************************
+ *              maximized_area
+ *
+ * The part of a monitor that a maximized window shows in: the work area, or the whole monitor for
+ * a popup without a caption (win32u's get_visible_rect).
+ */
+static RECT maximized_area(UINT style, const MONITORINFO *info)
+{
+    if ((style & WS_MAXIMIZEBOX) && ((style & WS_CAPTION) == WS_CAPTION || !(style & WS_POPUP)))
+        return info->rcWork;
+    return info->rcMonitor;
+}
+
+
+/***********************************************************************
+ *              draws_own_frame
+ *
+ * Whether the app draws the window's whole frame: win32u leaves the visible rect the whole window
+ * rect. A maximized window shows only within the work area of its monitor (or the monitor, for a
+ * popup without a caption), so for one, the visible rect is the window rect clipped to that.
+ * The window's style and rects are the new ones; call it without the window data locked.
+ */
+static BOOL draws_own_frame(UINT style, const struct window_rects *rects)
+{
+    MONITORINFO info = {.cbSize = sizeof(info)};
+    HMONITOR monitor;
+    RECT area, clipped;
+    UINT context;
+    BOOL ret = FALSE;
+
+    if (EqualRect(&rects->window, &rects->visible)) return TRUE;
+    if (!(style & WS_MAXIMIZE) || (style & WS_CHILD)) return FALSE;
+
+    context = NtUserSetThreadDpiAwarenessContext(NTUSER_DPI_PER_MONITOR_AWARE_V2);
+    if ((monitor = NtUserMonitorFromRect(&rects->window, MONITOR_DEFAULTTONEAREST)) &&
+        NtUserGetMonitorInfo(monitor, &info))
+    {
+        area = maximized_area(style, &info);
+        clipped.left = max(rects->window.left, area.left);
+        clipped.top = max(rects->window.top, area.top);
+        clipped.right = min(rects->window.right, area.right);
+        clipped.bottom = min(rects->window.bottom, area.bottom);
+        ret = EqualRect(&clipped, &rects->visible);
+    }
+    NtUserSetThreadDpiAwarenessContext(context);
+    return ret;
+}
+
+
+/***********************************************************************
  *              get_cocoa_window_features
  */
 static struct macdrv_window_features get_cocoa_window_features(struct macdrv_win_data *data, DWORD style, DWORD ex_style)
@@ -107,7 +156,7 @@ static struct macdrv_window_features get_cocoa_window_features(struct macdrv_win
     struct macdrv_window_features wf = {0};
 
     if (ex_style & WS_EX_NOACTIVATE) wf.prevents_app_activation = TRUE;
-    if (EqualRect(&data->rects.window, &data->rects.visible))
+    if (data->own_frame)
     {
         /* The app draws its own frame, but a sizing border still lets the user resize the
          * window: let macOS and its window tools resize it too. */
@@ -562,6 +611,7 @@ static struct macdrv_win_data *macdrv_create_win_data(HWND hwnd, const struct wi
 
     if (!(data = alloc_win_data(hwnd))) return NULL;
     data->rects = *rects;
+    data->own_frame = EqualRect(&rects->window, &rects->visible); /* updated by WindowPosChanged */
 
     if (parent == NtUserGetDesktopWindow())
     {
@@ -1671,6 +1721,7 @@ void macdrv_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT
     struct macdrv_win_data *data;
     unsigned int new_style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
     struct window_rects old_rects;
+    BOOL own_frame = draws_own_frame(new_style, new_rects);
 
     if (!(data = get_win_data(hwnd))) return;
 
@@ -1678,6 +1729,7 @@ void macdrv_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT
 
     old_rects = data->rects;
     data->rects = *new_rects;
+    data->own_frame = own_frame;
     if (!(new_style & WS_MAXIMIZE))
     {
         data->frame_gesture = FALSE;
@@ -1813,7 +1865,26 @@ void macdrv_window_frame_changed(HWND hwnd, const macdrv_event *event)
 
     visible = rect_from_cgrect(event->window_frame_changed.frame);
     old_visible = data->rects.visible;
-    rect = window_rect_from_visible(&data->rects, visible);
+    being_dragged = data->drag_event != NULL;
+
+    /* Something on the Mac side, a window tool such as Rectangle, is changing a maximized
+     * window's frame: macdrv_window_frame_settled judges the result once the frame stops changing. */
+    if (!EqualRect(&visible, &old_visible) && !event->window_frame_changed.fullscreen &&
+        !event->window_frame_changed.in_resize && !being_dragged && !data->frame_gesture &&
+        (NtUserGetWindowLongW(hwnd, GWL_STYLE) & WS_MAXIMIZE))
+    {
+        data->frame_gesture = TRUE;
+        data->gesture_start = old_visible;
+        data->gesture_start_window = data->rects.window;
+    }
+
+    /* A maximized window that draws its own frame hangs its border past the work area, where win32u
+     * hides it. Moved by a window tool, it isn't there any more: the frame the tool gives it is all
+     * of the window, or the hidden border would show past the frame's edges. */
+    if (data->frame_gesture && data->own_frame)
+        rect = visible;
+    else
+        rect = window_rect_from_visible(&data->rects, visible);
     width = rect.right - rect.left;
     height = rect.bottom - rect.top;
 
@@ -1831,17 +1902,6 @@ void macdrv_window_frame_changed(HWND hwnd, const macdrv_event *event)
         TRACE("%p resizing from (%dx%d) to (%dx%d)\n", hwnd, data->rects.window.right - data->rects.window.left,
               data->rects.window.bottom - data->rects.window.top, width, height);
 
-    being_dragged = data->drag_event != NULL;
-
-    /* Something on the Mac side, a window tool such as Rectangle, is changing a maximized
-     * window's frame: macdrv_window_frame_settled judges the result once the frame stops changing. */
-    if ((!(flags & SWP_NOSIZE) || !(flags & SWP_NOMOVE)) && !event->window_frame_changed.fullscreen &&
-        !event->window_frame_changed.in_resize && !being_dragged && !data->frame_gesture &&
-        (NtUserGetWindowLongW(hwnd, GWL_STYLE) & WS_MAXIMIZE))
-    {
-        data->frame_gesture = TRUE;
-        data->gesture_start = old_visible;
-    }
     release_win_data(data);
 
     if (event->window_frame_changed.fullscreen)
@@ -1876,7 +1936,7 @@ void macdrv_window_frame_settled(HWND hwnd)
 {
     struct macdrv_win_data *data;
     MONITORINFO start_info, end_info;
-    RECT start, visible, window;
+    RECT start, start_window, visible, window, frame;
     BOOL end_fills;
     UINT context;
 
@@ -1888,6 +1948,7 @@ void macdrv_window_frame_settled(HWND hwnd)
     }
     data->frame_gesture = FALSE;
     start = data->gesture_start;
+    start_window = data->gesture_start_window;
     visible = data->rects.visible;
     window = data->rects.window;
     release_win_data(data);
@@ -1913,15 +1974,23 @@ void macdrv_window_frame_settled(HWND hwnd)
     {
         WINDOWPLACEMENT placement = {.length = sizeof(placement)};
 
-        if (!end_fills)
-        {
-            /* the window's frame around its visible rect stays as it was */
-            RECT frame = end_info.rcWork;
+        /* It fills the new display as it filled the old one: all of it or the work area, the
+         * window's edges where they were from that area's edges (a border hidden past them, a Mac
+         * title bar below the area's top). */
+        RECT start_area = start_info.rcWork, end_area = end_info.rcWork;
 
-            frame.left += window.left - visible.left;
-            frame.top += window.top - visible.top;
-            frame.right += window.right - visible.right;
-            frame.bottom += window.bottom - visible.bottom;
+        if (start.top <= start_info.rcMonitor.top && start.bottom >= start_info.rcMonitor.bottom &&
+            !EqualRect(&start_info.rcMonitor, &start_info.rcWork))
+        {
+            start_area = start_info.rcMonitor;
+            end_area = end_info.rcMonitor;
+        }
+        frame.left = end_area.left + start_window.left - start_area.left;
+        frame.top = end_area.top + start_window.top - start_area.top;
+        frame.right = end_area.right + start_window.right - start_area.right;
+        frame.bottom = end_area.bottom + start_window.bottom - start_area.bottom;
+        if (!EqualRect(&frame, &window))
+        {
             TRACE("%p moved to another display: filling it with %s\n", hwnd, wine_dbgstr_rect(&frame));
             NtUserSetRawWindowPos(hwnd, frame, SWP_NOACTIVATE | SWP_NOZORDER, FALSE);
         }
@@ -2135,7 +2204,9 @@ void macdrv_window_restore_requested(HWND hwnd, const macdrv_event *event)
         if ((style & WS_MAXIMIZE) && (style & WS_VISIBLE) && (data = get_win_data(hwnd)))
         {
             RECT rect = rect_from_cgrect(event->window_restore_requested.frame);
-            rect = window_rect_from_visible(&data->rects, rect);
+            /* restored, a window that draws its own frame is all visible: its hidden border (see
+             * macdrv_window_frame_changed) doesn't come back past the frame */
+            if (!data->own_frame) rect = window_rect_from_visible(&data->rects, rect);
             release_win_data(data);
 
             NtUserSetRawWindowPos(hwnd, rect, 0, TRUE);
