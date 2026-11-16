@@ -786,6 +786,7 @@ static void xpath_push_unary_step(struct xpath_parser_context *ctxt, enum xpath_
 
     step->op = op;
     step->ch1 = ch;
+    step->ch2 = -1;
     step->value = value;
     step->value2 = value2;
 }
@@ -6475,9 +6476,9 @@ static void xpath_builtin_string_length(struct xpath_parser_context *ctxt, int n
 
         return;
     }
-    if (!xpath_builtin_check_stack(ctxt, nargs, 0))
+    if (!xpath_builtin_check_stack(ctxt, nargs, 1))
         return;
-    xpath_arg_cast_to_number(ctxt);
+    xpath_arg_cast_to_string(ctxt);
     if (!xpath_check_type(ctxt, _XPATH_STRING))
         return;
     cur = xpath_pop_value(ctxt);
