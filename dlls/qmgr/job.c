@@ -644,28 +644,33 @@ static HRESULT WINAPI BackgroundCopyJob_GetNotifyFlags(IBackgroundCopyJob4 *ifac
 static HRESULT WINAPI BackgroundCopyJob_SetNotifyInterface(IBackgroundCopyJob4 *iface, IUnknown *callback)
 {
     BackgroundCopyJobImpl *job = impl_from_IBackgroundCopyJob4(iface);
+    IBackgroundCopyCallback2 *new_callback = NULL, *old_callback;
+    BOOL callback2 = FALSE;
     HRESULT hr = S_OK;
 
     TRACE("%p, %p.\n", iface, callback);
 
     if (is_job_done(job)) return BG_E_INVALID_STATE;
 
-    if (job->callback)
-    {
-        IBackgroundCopyCallback2_Release(job->callback);
-        job->callback = NULL;
-        job->callback2 = FALSE;
-    }
-
+    /* Asked for outside the job's lock: for an app's callback each is a call into the app. */
     if (callback)
     {
-        hr = IUnknown_QueryInterface(callback, &IID_IBackgroundCopyCallback2, (void **)&job->callback);
+        hr = IUnknown_QueryInterface(callback, &IID_IBackgroundCopyCallback2, (void **)&new_callback);
         if (FAILED(hr))
-            hr = IUnknown_QueryInterface(callback, &IID_IBackgroundCopyCallback, (void**)&job->callback);
+            hr = IUnknown_QueryInterface(callback, &IID_IBackgroundCopyCallback, (void **)&new_callback);
         else
-            job->callback2 = TRUE;
+            callback2 = TRUE;
+        if (FAILED(hr)) new_callback = NULL;
     }
 
+    /* Swapped under the lock processJob takes the callback with; released outside it. */
+    EnterCriticalSection(&job->cs);
+    old_callback = job->callback;
+    job->callback = new_callback;
+    job->callback2 = callback2;
+    LeaveCriticalSection(&job->cs);
+
+    if (old_callback) IBackgroundCopyCallback2_Release(old_callback);
     return hr;
 }
 
@@ -1274,12 +1279,28 @@ void processJob(BackgroundCopyJobImpl *job)
         LeaveCriticalSection(&job->cs);
         if (done)
         {
+            IBackgroundCopyCallback2 *callback = NULL;
+
             transitionJobState(job, BG_JOB_STATE_QUEUED, BG_JOB_STATE_TRANSFERRED);
+
+            /* The callback may stop notifications (SetNotifyInterface with NULL) or complete the
+             * job while it runs, as Microsoft's own samples do: both are held until it returns. */
+            EnterCriticalSection(&job->cs);
             if (job->callback && (job->notify_flags & BG_NOTIFY_JOB_TRANSFERRED))
             {
+                callback = job->callback;
+                IBackgroundCopyCallback2_AddRef(callback);
+            }
+            LeaveCriticalSection(&job->cs);
+
+            if (callback)
+            {
+                IBackgroundCopyJob4_AddRef(&job->IBackgroundCopyJob4_iface);
                 TRACE("Calling JobTransferred -->\n");
-                IBackgroundCopyCallback2_JobTransferred(job->callback, (IBackgroundCopyJob*)&job->IBackgroundCopyJob4_iface);
+                IBackgroundCopyCallback2_JobTransferred(callback, (IBackgroundCopyJob*)&job->IBackgroundCopyJob4_iface);
                 TRACE("Called JobTransferred <--\n");
+                IBackgroundCopyCallback2_Release(callback);
+                IBackgroundCopyJob4_Release(&job->IBackgroundCopyJob4_iface);
             }
             return;
         }
