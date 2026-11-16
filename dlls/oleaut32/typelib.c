@@ -7974,11 +7974,10 @@ static HRESULT WINAPI ITypeInfo_fnGetRefTypeInfo(
                     BSTR libnam;
 
                     /* Search on disk */
-                    result = query_typelib_path(TLB_get_guid_null(ref_type->pImpTLInfo->guid),
+                    result = QueryPathOfRegTypeLib(TLB_get_guid_null(ref_type->pImpTLInfo->guid),
                             ref_type->pImpTLInfo->wVersionMajor,
                             ref_type->pImpTLInfo->wVersionMinor,
-                            This->pTypeLib->syskind,
-                            ref_type->pImpTLInfo->lcid, &libnam, TRUE);
+                            ref_type->pImpTLInfo->lcid, &libnam);
                     if (FAILED(result))
                         libnam = SysAllocString(ref_type->pImpTLInfo->name);
 
