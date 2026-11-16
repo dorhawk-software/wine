@@ -513,6 +513,13 @@ static WCHAR *read_c2r_manifest( const WCHAR *path )
     return text;
 }
 
+static const WCHAR *c2r_find_text( const WCHAR *text, const WCHAR *needle, int count )
+{
+    int offset = FindStringOrdinal( FIND_FROMSTART, text, count, needle, -1, TRUE );
+
+    return offset >= 0 ? text + offset : NULL;
+}
+
 static WCHAR *c2r_xml_attribute( const WCHAR *text, const WCHAR *name )
 {
     const WCHAR *start, *end;
@@ -520,7 +527,7 @@ static WCHAR *c2r_xml_attribute( const WCHAR *text, const WCHAR *name )
     SIZE_T len;
 
     if (swprintf( search, ARRAY_SIZE( search ), L"%s=\"", name ) < 0) return NULL;
-    if (!(start = StrStrIW( text, search ))) return NULL;
+    if (!(start = c2r_find_text( text, search, -1 ))) return NULL;
     start += wcslen( search );
     if (!(end = wcschr( start, '"' ))) return NULL;
     len = end - start;
@@ -566,7 +573,7 @@ static BOOL c2r_manifest_has_component( const WCHAR *text, const WCHAR *componen
     for (i = 0; i < ARRAY_SIZE( tags ); i++)
     {
         start = text;
-        while ((start = StrStrIW( start, tags[i] )))
+        while ((start = c2r_find_text( start, tags[i], -1 )))
         {
             if (!(end = wcschr( start, '>' ))) break;
             id = c2r_xml_attribute_range( start, end, L"ComponentId" );
@@ -625,7 +632,7 @@ static UINT get_c2r_product_component( const WCHAR *component, const WCHAR *prod
         text = read_c2r_manifest( manifest );
         free( manifest );
         if (!text) continue;
-        if (!StrStrIW( text, component ))
+        if (!c2r_find_text( text, component, -1 ))
         {
             free( text );
             continue;
@@ -691,7 +698,7 @@ static BOOL find_c2r_component_in_manifest( const WCHAR *text, const WCHAR *comp
     const WCHAR *publish, *publish_end;
     WCHAR *id, *candidate_qualifier;
 
-    while ((component_start = StrStrIW( component_start, L"<Component " )))
+    while ((component_start = c2r_find_text( component_start, L"<Component ", -1 )))
     {
         if (!(component_tag_end = wcschr( component_start, '>' ))) break;
         if (component_tag_end > component_start && component_tag_end[-1] == '/')
@@ -699,9 +706,9 @@ static BOOL find_c2r_component_in_manifest( const WCHAR *text, const WCHAR *comp
             component_start = component_tag_end + 1;
             continue;
         }
-        if (!(component_end = StrStrIW( component_tag_end, L"</Component>" ))) break;
+        if (!(component_end = c2r_find_text( component_tag_end, L"</Component>", -1 ))) break;
         publish = component_tag_end + 1;
-        while ((publish = StrStrNIW( publish, L"<PublishComponent ", component_end - publish )))
+        while ((publish = c2r_find_text( publish, L"<PublishComponent ", component_end - publish )))
         {
             if (!(publish_end = wcschr( publish, '>' )) || publish_end > component_end) break;
             id = c2r_xml_attribute_range( publish, publish_end, L"PublishComponentId" );
@@ -771,7 +778,7 @@ static BOOL find_c2r_manifest_component( const WCHAR *installation, const WCHAR 
         text = read_c2r_manifest( manifest );
         free( manifest );
         if (!text) continue;
-        if (!StrStrIW( text, component ))
+        if (!c2r_find_text( text, component, -1 ))
         {
             free( text );
             continue;
