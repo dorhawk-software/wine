@@ -748,6 +748,90 @@ static BOOL link_datatypes(xmlDocPtr schema)
     return TRUE;
 }
 
+static BOOL parse_hex4(const xmlChar *str, unsigned int *value)
+{
+    int i;
+
+    *value = 0;
+    for (i = 0; i < 4; i++)
+    {
+        if (str[i] >= '0' && str[i] <= '9') *value = *value * 16 + str[i] - '0';
+        else if (str[i] >= 'a' && str[i] <= 'f') *value = *value * 16 + str[i] - 'a' + 10;
+        else if (str[i] >= 'A' && str[i] <= 'F') *value = *value * 16 + str[i] - 'A' + 10;
+        else return FALSE;
+    }
+    return TRUE;
+}
+
+/* MSXML takes \uXXXX escapes in schema patterns (App-V's deployment schema uses them); XML
+ * Schema's regular expressions, and libxml2's, have none. Writes each as the character itself,
+ * with a backslash where the character means something in a pattern. NUL can't be in the string;
+ * XML text can't hold it either, so \u0000 becomes U+0001, which matches the same text. Returns
+ * NULL when there is nothing to change, or for an escape it can't write (a lone surrogate). */
+static xmlChar *pattern_without_u_escapes(const xmlChar *pattern)
+{
+    static const char special[] = "\\|.-^?*+{}()[]";
+    int len = xmlStrlen(pattern), i = 0, out = 0;
+    unsigned int c, low;
+    BOOL changed = FALSE;
+    xmlChar *ret;
+
+    /* Six characters become at most four bytes, so the result is never longer. */
+    if (!(ret = xmlMalloc(len + 1))) return NULL;
+    while (i < len)
+    {
+        if (pattern[i] != '\\' || pattern[i + 1] != 'u' || !parse_hex4(pattern + i + 2, &c))
+        {
+            /* Copies an escape such as \\ or \p whole, so its second character isn't read as one. */
+            if (pattern[i] == '\\' && i + 1 < len) ret[out++] = pattern[i++];
+            ret[out++] = pattern[i++];
+            continue;
+        }
+        i += 6;
+        if (c >= 0xd800 && c < 0xdc00 && pattern[i] == '\\' && pattern[i + 1] == 'u' &&
+            parse_hex4(pattern + i + 2, &low) && low >= 0xdc00 && low < 0xe000)
+        {
+            c = 0x10000 + ((c - 0xd800) << 10) + (low - 0xdc00);
+            i += 6;
+        }
+        else if (c >= 0xd800 && c < 0xe000)
+        {
+            xmlFree(ret);
+            return NULL;
+        }
+        if (!c) c = 1;
+        if (c < 0x80 && strchr(special, c)) ret[out++] = '\\';
+        out += xmlCopyCharMultiByte(ret + out, c);
+        changed = TRUE;
+    }
+    ret[out] = 0;
+    if (changed) return ret;
+    xmlFree(ret);
+    return NULL;
+}
+
+static void convert_pattern_escapes(xmlNodePtr node)
+{
+    xmlChar *value, *pattern;
+
+    for (; node; node = node->next)
+    {
+        if (node->type != XML_ELEMENT_NODE) continue;
+        if (xmlStrEqual(node->name, BAD_CAST "pattern") && node->ns && xmlStrEqual(node->ns->href, XSD_nsURI) &&
+            (value = xmlGetNoNsProp(node, BAD_CAST "value")))
+        {
+            if ((pattern = pattern_without_u_escapes(value)))
+            {
+                TRACE("pattern %s as %s\n", debugstr_a((const char *)value), debugstr_a((const char *)pattern));
+                xmlSetProp(node, BAD_CAST "value", pattern);
+                xmlFree(pattern);
+            }
+            xmlFree(value);
+        }
+        convert_pattern_escapes(node->children);
+    }
+}
+
 static cache_entry* cache_entry_from_xsd_doc(xmlDocPtr doc, xmlChar const* nsURI, MSXML_VERSION v)
 {
     cache_entry* entry = malloc(sizeof(cache_entry));
@@ -755,6 +839,7 @@ static cache_entry* cache_entry_from_xsd_doc(xmlDocPtr doc, xmlChar const* nsURI
     xmlDocPtr new_doc = xmlCopyDoc(doc, 1);
 
     link_datatypes(new_doc);
+    convert_pattern_escapes(xmlDocGetRootElement(new_doc));
 
     /* TODO: if the nsURI is different from the default xmlns or targetNamespace,
      *       do we need to do something special here? */
