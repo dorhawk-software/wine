@@ -29,13 +29,14 @@ static const struct
 }
 present_contracts[] =
 {
-    { L"Windows.Foundation.UniversalApiContract", 10, },
+    { L"Windows.Foundation.UniversalApiContract", 12, },
 };
 
-static BOOLEAN is_api_contract_present( const HSTRING hname, unsigned int version )
+static BOOL is_api_contract_present( const WCHAR *name, unsigned int version )
 {
-    const WCHAR *name = WindowsGetStringRawBuffer( hname, NULL );
     unsigned int i;
+
+    if (!name) return FALSE;
 
     for (i = 0; i < ARRAY_SIZE(present_contracts); ++i)
         if (!wcsicmp( name, present_contracts[i].name )) return version <= present_contracts[i].max_major;
@@ -251,7 +252,7 @@ static HRESULT STDMETHODCALLTYPE api_information_statics_IsApiContractPresentByM
     if (!contract_name)
         return E_INVALIDARG;
 
-    *value = is_api_contract_present( contract_name, major_version );
+    *value = is_api_contract_present( WindowsGetStringRawBuffer( contract_name, NULL ), major_version );
     return S_OK;
 }
 
@@ -1808,8 +1809,8 @@ HRESULT WINAPI DllGetActivationFactory(HSTRING classid, IActivationFactory **fac
 
 HRESULT WINAPI RoIsApiContractMajorVersionPresent(const WCHAR *name, UINT16 major, BOOL *result)
 {
-    FIXME("name %s, major %u, result %p\n", debugstr_w(name), major, result);
-    *result = FALSE;
+    TRACE("name %s, major %u, result %p.\n", debugstr_w(name), major, result);
+    *result = is_api_contract_present(name, major);
     return S_OK;
 }
 
