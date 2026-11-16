@@ -405,8 +405,8 @@ SOURCES = \
 	inaddr.h \
 	indexsrv.idl \
 	initguid.h \
-	inputpaneinterop.idl \
 	inkpresenterdesktop.idl \
+	inputpaneinterop.idl \
 	inputscope.idl \
 	inseng.idl \
 	inspectable.idl \
@@ -997,6 +997,7 @@ SOURCES = \
 	wct.h \
 	wdbgexts.h \
 	weakreference.idl \
+	webauthenticationcoremanagerinterop.idl \
 	webservices.h \
 	websocket.h \
 	werapi.h \
@@ -1060,6 +1061,7 @@ SOURCES = \
 	windows.graphics.imaging.idl \
 	windows.h \
 	windows.management.deployment.idl \
+	windows.management.idl \
 	windows.media.capture.idl \
 	windows.media.closedcaptioning.idl \
 	windows.media.core.idl \
@@ -1080,7 +1082,6 @@ SOURCES = \
 	windows.perception.spatial.idl \
 	windows.perception.spatial.surfaces.idl \
 	windows.security.authentication.onlineid.idl \
-	webauthenticationcoremanagerinterop.idl \
 	windows.security.authentication.web.core.idl \
 	windows.security.authorization.appcapabilityaccess.idl \
 	windows.security.credentials.idl \
@@ -1100,16 +1101,16 @@ SOURCES = \
 	windows.system.profile.systemmanufacturers.idl \
 	windows.system.threading.idl \
 	windows.system.userprofile.idl \
-	windows.ui.composition.idl \
 	windows.ui.composition.core.idl \
 	windows.ui.composition.desktop.idl \
+	windows.ui.composition.idl \
 	windows.ui.composition.interactions.idl \
 	windows.ui.composition.interop.idl \
 	windows.ui.core.idl \
 	windows.ui.idl \
 	windows.ui.input.idl \
-	windows.ui.input.inking.idl \
 	windows.ui.input.inking.core.idl \
+	windows.ui.input.inking.idl \
 	windows.ui.notifications.idl \
 	windows.ui.text.core.idl \
 	windows.ui.text.idl \
@@ -1119,6 +1120,7 @@ SOURCES = \
 	windows.ui.xaml.hosting.desktopwindowxamlsource.idl \
 	windows.ui.xaml.idl \
 	windows.ui.xaml.interop.idl \
+	windows.web.http.idl \
 	windowscontracts.idl \
 	windowsx.h \
 	wine/afd.h \
@@ -1269,8 +1271,10 @@ SOURCES = \
 
 INSTALL_LIB = \
 	windows.applicationmodel.winmd \
+	windows.foundation.winmd \
 	windows.globalization.winmd \
 	windows.graphics.winmd \
+	windows.management.winmd \
 	windows.media.winmd \
 	windows.networking.winmd \
 	windows.perception.winmd \

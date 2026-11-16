@@ -1333,8 +1333,10 @@ sortdefault.nls
 
 [WinmdFiles]
 windows.applicationmodel.winmd
+windows.foundation.winmd
 windows.globalization.winmd
 windows.graphics.winmd
+windows.management.winmd
 windows.media.winmd
 windows.networking.winmd
 windows.perception.winmd

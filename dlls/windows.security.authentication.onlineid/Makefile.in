@@ -15,9 +15,9 @@ SOURCES = \
 	result.c \
 	string_map.c \
 	ticket.c \
+	unixlib.c \
 	web_account.c \
 	web_accounts.c \
 	web_async.c \
 	web_core.c \
-	web_token.c \
-	unixlib.c
+	web_token.c
