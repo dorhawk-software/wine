@@ -239,6 +239,11 @@ struct desktop_window_target
     ID2D1Bitmap1 *render_bitmap;
     ID2D1Bitmap1 *render_snapshot;
     ID2D1Bitmap1 *readback_bitmap;
+    /* The last frame, read back for GDI: painted onto the layer window when presented and again
+     * on WM_PAINT. */
+    HBITMAP frame_bitmap;
+    UINT frame_width;
+    UINT frame_height;
     struct list entry;
     struct list layer_entry;
     CRITICAL_SECTION render_cs;
@@ -267,7 +272,7 @@ static HINSTANCE layer_instance;
 static const WCHAR layer_class_name[] = L"Wine.UI.Composition.Layer";
 
 static HRESULT desktop_window_target_render( struct desktop_window_target *target );
-static void desktop_window_target_repaint( struct desktop_window_target *target );
+static void desktop_window_target_paint( struct desktop_window_target *target, HDC hdc );
 
 static inline struct desktop_window_target *impl_from_IDesktopWindowTarget( IDesktopWindowTarget *iface )
 {
@@ -353,6 +358,7 @@ static ULONG desktop_window_target_release( struct desktop_window_target *impl )
         }
         if (impl->root) IVisual_Release( impl->root );
         if (impl->dcomp_target) IDCompositionTarget_Release( impl->dcomp_target );
+        if (impl->frame_bitmap) DeleteObject( impl->frame_bitmap );
         DeleteCriticalSection( &impl->render_cs );
         free( impl );
     }
@@ -389,12 +395,12 @@ static LRESULT CALLBACK composition_layer_proc( HWND hwnd, UINT message, WPARAM 
 
     if (message == WM_NCDESTROY) return DefWindowProcW( hwnd, message, wparam, lparam );
     BeginPaint( hwnd, &paint );
-    EndPaint( hwnd, &paint );
     if (found)
     {
-        desktop_window_target_repaint( found );
+        desktop_window_target_paint( found, paint.hdc );
         desktop_window_target_release( found );
     }
+    EndPaint( hwnd, &paint );
     return 0;
 }
 
@@ -640,6 +646,11 @@ static HRESULT desktop_window_target_create( IDCompositionDevice *device, struct
         hr = HRESULT_FROM_WIN32( GetLastError() );
         goto failed;
     }
+    /* Frames reach the layer through its DC (desktop_window_target_paint), not UpdateLayeredWindow,
+     * which shows nothing for a child window on drivers without layered child windows (the Mac
+     * driver). Constant alpha makes it a layered window that paints as a child does; layered and
+     * transparent, it still lets clicks through to the window below. */
+    SetLayeredWindowAttributes( impl->render_hwnd, 0, 255, LWA_ALPHA );
     EnterCriticalSection( &layer_cs );
     list_add_tail( &layer_targets, &impl->layer_entry );
     impl->layer_linked = TRUE;
@@ -11755,19 +11766,34 @@ static struct composition_drawing_surface *find_visual_drawing_surface( IVisual 
     return NULL;
 }
 
+/* Blends the retained frame onto the layer window: through hdc when given (WM_PAINT), through a
+ * DC of its own otherwise. Called with render_cs held. */
+static void desktop_window_target_paint_locked( struct desktop_window_target *target, HDC hdc )
+{
+    BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    HDC window_dc = NULL, frame_dc;
+    HGDIOBJ previous;
+
+    if (!target->frame_bitmap || !target->render_hwnd) return;
+    if (!hdc && !(hdc = window_dc = GetDC( target->render_hwnd ))) return;
+    if ((frame_dc = CreateCompatibleDC( hdc )))
+    {
+        previous = SelectObject( frame_dc, target->frame_bitmap );
+        GdiAlphaBlend( hdc, 0, 0, target->frame_width, target->frame_height,
+                frame_dc, 0, 0, target->frame_width, target->frame_height, blend );
+        SelectObject( frame_dc, previous );
+        DeleteDC( frame_dc );
+    }
+    if (window_dc) ReleaseDC( target->render_hwnd, window_dc );
+}
+
 static HRESULT desktop_window_target_present( struct desktop_window_target *target )
 {
     D2D1_BITMAP_PROPERTIES1 properties = {0};
     D2D1_MAPPED_RECT mapped;
     BITMAPINFO info = {{0}};
-    BLENDFUNCTION blend = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-    SIZE size = {(LONG)target->width, (LONG)target->height};
-    POINT source = {0, 0};
-    HGDIOBJ previous = NULL;
-    HBITMAP bitmap = NULL;
-    HDC dc = NULL;
-    BYTE *pixels;
     SIZE_T stride = (SIZE_T)target->width * 4;
+    BYTE *pixels;
     UINT y;
     HRESULT hr;
 
@@ -11783,37 +11809,37 @@ static HRESULT desktop_window_target_present( struct desktop_window_target *targ
     }
     if (FAILED(hr = ID2D1Bitmap1_CopyFromBitmap( target->readback_bitmap, NULL,
             (ID2D1Bitmap *)target->render_snapshot, NULL ))) return hr;
-    hr = E_OUTOFMEMORY;
-    if (!(dc = CreateCompatibleDC( NULL ))) goto done;
-    info.bmiHeader.biSize = sizeof(info.bmiHeader);
-    info.bmiHeader.biWidth = target->width;
-    info.bmiHeader.biHeight = -(LONG)target->height;
-    info.bmiHeader.biPlanes = 1;
-    info.bmiHeader.biBitCount = 32;
-    info.bmiHeader.biCompression = BI_RGB;
-    if (!(bitmap = CreateDIBSection( dc, &info, DIB_RGB_COLORS, (void **)&pixels, NULL, 0 ))) goto done;
-    if (!(previous = SelectObject( dc, bitmap )) || previous == HGDI_ERROR)
+    if (target->frame_bitmap && (target->frame_width != target->width || target->frame_height != target->height))
     {
-        previous = NULL;
-        hr = E_FAIL;
-        goto done;
+        DeleteObject( target->frame_bitmap );
+        target->frame_bitmap = NULL;
     }
-    if (FAILED(hr = ID2D1Bitmap1_Map( target->readback_bitmap, D2D1_MAP_OPTIONS_READ, &mapped ))) goto done;
+    if (!target->frame_bitmap)
+    {
+        info.bmiHeader.biSize = sizeof(info.bmiHeader);
+        info.bmiHeader.biWidth = target->width;
+        info.bmiHeader.biHeight = -(LONG)target->height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        if (!(target->frame_bitmap = CreateDIBSection( NULL, &info, DIB_RGB_COLORS, (void **)&pixels, NULL, 0 )))
+            return E_OUTOFMEMORY;
+        target->frame_width = target->width;
+        target->frame_height = target->height;
+    }
+    else
+    {
+        DIBSECTION dib;
+        if (!GetObjectW( target->frame_bitmap, sizeof(dib), &dib )) return E_FAIL;
+        pixels = dib.dsBm.bmBits;
+    }
+    if (FAILED(hr = ID2D1Bitmap1_Map( target->readback_bitmap, D2D1_MAP_OPTIONS_READ, &mapped ))) return hr;
     for (y = 0; y < target->height; ++y)
         memcpy( pixels + y * stride, mapped.bits + (SIZE_T)y * mapped.pitch, stride );
-    if (FAILED(hr = ID2D1Bitmap1_Unmap( target->readback_bitmap ))) goto done;
-    if (!UpdateLayeredWindow( target->render_hwnd, NULL, NULL, &size,
-            dc, &source, 0, &blend, ULW_ALPHA ))
-    {
-        hr = HRESULT_FROM_WIN32( GetLastError() );
-        if (SUCCEEDED(hr)) hr = E_FAIL;
-    }
-
-done:
-    if (previous) SelectObject( dc, previous );
-    if (bitmap) DeleteObject( bitmap );
-    if (dc) DeleteDC( dc );
-    return hr;
+    if (FAILED(hr = ID2D1Bitmap1_Unmap( target->readback_bitmap ))) return hr;
+    GdiFlush();
+    desktop_window_target_paint_locked( target, NULL );
+    return S_OK;
 }
 
 static HRESULT desktop_window_target_render_locked( struct desktop_window_target *target )
@@ -11946,18 +11972,10 @@ static HRESULT desktop_window_target_render( struct desktop_window_target *targe
     return hr;
 }
 
-static void desktop_window_target_repaint( struct desktop_window_target *target )
+static void desktop_window_target_paint( struct desktop_window_target *target, HDC hdc )
 {
-    HRESULT hr;
-
     EnterCriticalSection( &target->render_cs );
-    if (!target->rendering && target->render_snapshot && IsWindow( target->render_hwnd ))
-    {
-        target->rendering = TRUE;
-        hr = desktop_window_target_present( target );
-        if (FAILED(hr)) WARN( "composition layer repaint failed, hr %#lx.\n", hr );
-        target->rendering = FALSE;
-    }
+    desktop_window_target_paint_locked( target, hdc );
     LeaveCriticalSection( &target->render_cs );
 }
 
