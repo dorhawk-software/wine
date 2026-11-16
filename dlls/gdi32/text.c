@@ -967,6 +967,54 @@ BOOL WINAPI ExtTextOutW( HDC hdc, INT x, INT y, UINT flags, const RECT *rect,
     if (dc_attr->emf && !EMFDC_ExtTextOut( dc_attr, x, y, flags, rect, str, count, dx ))
         return FALSE;
 
+    /* Select a Thai font only when the current font has no matching glyph. */
+    do
+    {
+        BOOL is_thai = FALSE;
+        int i;
+
+        if (flags & (ETO_GLYPH_INDEX | ETO_IGNORELANGUAGE)) break;
+
+        for (i = 0; i < count; ++i)
+        {
+            WORD glyph;
+
+            if (str[i] >= 0x0e00 && str[i] <= 0x0e7f &&
+                NtGdiGetGlyphIndicesW( hdc, str + i, 1, &glyph, GGI_MARK_NONEXISTING_GLYPHS ) != GDI_ERROR &&
+                glyph == 0xffff)
+            {
+                is_thai = TRUE;
+                break;
+            }
+        }
+
+        if (is_thai)
+        {
+            const WCHAR *font_name = L"Microsoft Sans Serif";
+            HFONT old_font, new_font;
+            LOGFONTW log_font;
+
+            if (!(old_font = GetCurrentObject(hdc, OBJ_FONT))
+                    || !GetObjectW(old_font, sizeof(log_font), &log_font))
+                break;
+
+            if (wcscmp(log_font.lfFaceName, font_name) != 0 || log_font.lfCharSet != THAI_CHARSET)
+            {
+                wcscpy(log_font.lfFaceName, font_name);
+                log_font.lfCharSet = THAI_CHARSET;
+                if (!(new_font = CreateFontIndirectW(&log_font)))
+                    break;
+
+                SelectObject(hdc, new_font);
+                ret = ExtTextOutW(hdc, x, y, flags, rect, str, count, dx);
+                SelectObject(hdc, old_font);
+                DeleteObject(new_font);
+
+                return ret;
+            }
+        }
+    } while (0);
+
     if (!(flags & (ETO_GLYPH_INDEX | ETO_IGNORELANGUAGE)) && count > 0)
     {
         UINT bidi_flags;
