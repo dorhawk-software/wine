@@ -2709,6 +2709,10 @@ LSTATUS WINAPI RegNotifyChangeKeyValue( HKEY hkey, BOOL fWatchSubTree,
                                         DWORD fdwNotifyFilter, HANDLE hEvent,
                                         BOOL fAsync )
 {
+    /* An asynchronous notification outlives this call, and whoever completes it writes its status
+     * block then: the kernel on Windows, a registry virtualization layer hooking NtNotifyChangeKey
+     * (App-V's, for Microsoft 365) here. So it can't live on this stack. Nothing reads it. */
+    static IO_STATUS_BLOCK async_iosb;
     NTSTATUS status;
     IO_STATUS_BLOCK iosb;
 
@@ -2718,7 +2722,7 @@ LSTATUS WINAPI RegNotifyChangeKeyValue( HKEY hkey, BOOL fWatchSubTree,
     TRACE("(%p,%i,%ld,%p,%i)\n", hkey, fWatchSubTree, fdwNotifyFilter,
           hEvent, fAsync);
 
-    status = NtNotifyChangeKey( hkey, hEvent, NULL, NULL, &iosb,
+    status = NtNotifyChangeKey( hkey, hEvent, NULL, NULL, fAsync ? &async_iosb : &iosb,
                                 fdwNotifyFilter, fWatchSubTree, NULL, 0,
                                 fAsync);
 
