@@ -1169,7 +1169,9 @@ ULONG RpcAuthInfo_Release(RpcAuthInfo *AuthInfo)
 
     if (!refs)
     {
-        FreeCredentialsHandle(&AuthInfo->cred);
+        /* Invalid when local RPC was given a service without a package (RpcBindingSetAuthInfoExA). */
+        if (SecIsValidHandle(&AuthInfo->cred))
+            FreeCredentialsHandle(&AuthInfo->cred);
         if (AuthInfo->nt_identity)
         {
             free(AuthInfo->nt_identity->User);
@@ -1641,6 +1643,15 @@ RpcBindingServerFromClient(RPC_BINDING_HANDLE ClientBinding, RPC_BINDING_HANDLE*
     return RPC_S_OK;
 }
 
+/* Wine's local RPC (ncalrpc) runs no security handshake (rpcrt4_ncalrpc_authorize), so a security
+ * service asked for there needs no package. Packages this build lacks (Kerberos without libkrb5)
+ * would otherwise make local RPC fail with RPC_S_UNKNOWN_AUTHN_SERVICE, where Windows, which has
+ * them, succeeds (Microsoft 365's App-V asks for Kerberos on local RPC). */
+static BOOL is_local_rpc(const RpcBinding *bind)
+{
+    return bind->Protseq && !strcmp(bind->Protseq, "ncalrpc");
+}
+
 /***********************************************************************
  *             RpcBindingSetAuthInfoExA (RPCRT4.@)
  */
@@ -1731,17 +1742,27 @@ RpcBindingSetAuthInfoExA( RPC_BINDING_HANDLE Binding, RPC_CSTR ServerPrincName,
     if (packages[i].wRPCID == AuthnSvc)
         break;
 
-  if (i == package_count)
+  if (i == package_count && is_local_rpc(bind))
+  {
+    TRACE("no package for service %lu, local RPC needs none\n", AuthnSvc);
+    SecInvalidateHandle(&cred);
+    memset(&exp, 0, sizeof(exp));
+    cbMaxToken = 0;
+    r = ERROR_SUCCESS;
+  }
+  else if (i == package_count)
   {
     FIXME("unsupported AuthnSvc %lu\n", AuthnSvc);
     FreeContextBuffer(packages);
     return RPC_S_UNKNOWN_AUTHN_SERVICE;
   }
-
-  TRACE("found package %s for service %lu\n", packages[i].Name, AuthnSvc);
-  r = AcquireCredentialsHandleA(NULL, packages[i].Name, SECPKG_CRED_OUTBOUND, NULL,
-                                AuthIdentity, NULL, NULL, &cred, &exp);
-  cbMaxToken = packages[i].cbMaxToken;
+  else
+  {
+    TRACE("found package %s for service %lu\n", packages[i].Name, AuthnSvc);
+    r = AcquireCredentialsHandleA(NULL, packages[i].Name, SECPKG_CRED_OUTBOUND, NULL,
+                                  AuthIdentity, NULL, NULL, &cred, &exp);
+    cbMaxToken = packages[i].cbMaxToken;
+  }
   FreeContextBuffer(packages);
   if (r == ERROR_SUCCESS)
   {
@@ -1862,17 +1883,27 @@ RpcBindingSetAuthInfoExW( RPC_BINDING_HANDLE Binding, RPC_WSTR ServerPrincName, 
     if (packages[i].wRPCID == AuthnSvc)
         break;
 
-  if (i == package_count)
+  if (i == package_count && is_local_rpc(bind))
+  {
+    TRACE("no package for service %lu, local RPC needs none\n", AuthnSvc);
+    SecInvalidateHandle(&cred);
+    memset(&exp, 0, sizeof(exp));
+    cbMaxToken = 0;
+    r = ERROR_SUCCESS;
+  }
+  else if (i == package_count)
   {
     FIXME("unsupported AuthnSvc %lu\n", AuthnSvc);
     FreeContextBuffer(packages);
     return RPC_S_UNKNOWN_AUTHN_SERVICE;
   }
-
-  TRACE("found package %s for service %lu\n", debugstr_w(packages[i].Name), AuthnSvc);
-  r = AcquireCredentialsHandleW(NULL, packages[i].Name, SECPKG_CRED_OUTBOUND, NULL,
-                                AuthIdentity, NULL, NULL, &cred, &exp);
-  cbMaxToken = packages[i].cbMaxToken;
+  else
+  {
+    TRACE("found package %s for service %lu\n", debugstr_w(packages[i].Name), AuthnSvc);
+    r = AcquireCredentialsHandleW(NULL, packages[i].Name, SECPKG_CRED_OUTBOUND, NULL,
+                                  AuthIdentity, NULL, NULL, &cred, &exp);
+    cbMaxToken = packages[i].cbMaxToken;
+  }
   FreeContextBuffer(packages);
   if (r == ERROR_SUCCESS)
   {

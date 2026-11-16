@@ -1376,6 +1376,12 @@ RPC_STATUS RPCRT4_ServerGetRegisteredAuthInfo(
     EnterCriticalSection(&server_auth_info_cs);
     LIST_FOR_EACH_ENTRY(auth_info, &server_registered_auth_info, struct rpc_server_registered_auth_info, entry)
     {
+        if (auth_info->auth_type == auth_type && !auth_info->package_name)
+        {
+            /* Registered without a package (RpcServerRegisterAuthInfoW): no handshake possible. */
+            WARN("no package for service %u, only local RPC can use it\n", auth_type);
+            break;
+        }
         if (auth_info->auth_type == auth_type)
         {
             sec_status = AcquireCredentialsHandleW((SEC_WCHAR *)auth_info->principal, auth_info->package_name,
@@ -1447,14 +1453,25 @@ RPC_STATUS WINAPI RpcServerRegisterAuthInfoW( RPC_WSTR ServerPrincName, ULONG Au
     TRACE("(%s,%lu,%p,%p)\n", debugstr_w(ServerPrincName), AuthnSvc, GetKeyFn, Arg);
 
     status = find_security_package(AuthnSvc, &packages, &package);
-    if (status != RPC_S_OK)
+    if (status == RPC_S_UNKNOWN_AUTHN_SERVICE)
+    {
+        /* No package for it in this build (Kerberos without libkrb5): registered without one.
+         * That serves local RPC, which runs no security handshake (rpcrt4_ncalrpc_authorize);
+         * a handshake on any other transport fails (RPCRT4_ServerGetRegisteredAuthInfo). */
+        TRACE("no package for service %lu, registered for local RPC only\n", AuthnSvc);
+        package_name = NULL;
+        max_token = 0;
+    }
+    else if (status != RPC_S_OK)
         return status;
-
-    package_name = wcsdup(package->Name);
-    max_token = package->cbMaxToken;
-    FreeContextBuffer(packages);
-    if (!package_name)
-        return RPC_S_OUT_OF_RESOURCES;
+    else
+    {
+        package_name = wcsdup(package->Name);
+        max_token = package->cbMaxToken;
+        FreeContextBuffer(packages);
+        if (!package_name)
+            return RPC_S_OUT_OF_RESOURCES;
+    }
 
     auth_info = calloc(1, sizeof(*auth_info));
     if (!auth_info) {
