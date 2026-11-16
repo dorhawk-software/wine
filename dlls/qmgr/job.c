@@ -1262,6 +1262,47 @@ HRESULT BackgroundCopyJobConstructor(LPCWSTR displayName, BG_JOB_TYPE type, GUID
     return S_OK;
 }
 
+struct transferred_notification
+{
+    BackgroundCopyJobImpl *job;
+    IBackgroundCopyCallback2 *callback;
+};
+
+static void CALLBACK transferred_callback(TP_CALLBACK_INSTANCE *instance, void *context)
+{
+    struct transferred_notification *notification = context;
+    HRESULT init = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+
+    TRACE("Calling JobTransferred -->\n");
+    IBackgroundCopyCallback2_JobTransferred(notification->callback,
+            (IBackgroundCopyJob *)&notification->job->IBackgroundCopyJob4_iface);
+    TRACE("Called JobTransferred <--\n");
+    IBackgroundCopyCallback2_Release(notification->callback);
+    IBackgroundCopyJob4_Release(&notification->job->IBackgroundCopyJob4_iface);
+    if (SUCCEEDED(init)) CoUninitialize();
+    free(notification);
+}
+
+/* Calls JobTransferred on a thread of its own, holding the job and the callback until it returns
+ * (it may stop notifications or complete the job inside). Each step is a call into the app, which
+ * may not answer at once: the transfer thread, which every job waits for, never waits for it. */
+static void notify_transferred(BackgroundCopyJobImpl *job, IBackgroundCopyCallback2 *callback)
+{
+    struct transferred_notification *notification = malloc(sizeof(*notification));
+
+    if (notification)
+    {
+        IBackgroundCopyJob4_AddRef(&job->IBackgroundCopyJob4_iface);
+        notification->job = job;
+        notification->callback = callback;
+        if (TrySubmitThreadpoolCallback(transferred_callback, notification, NULL)) return;
+        IBackgroundCopyJob4_Release(&job->IBackgroundCopyJob4_iface);
+        free(notification);
+    }
+    ERR("JobTransferred not sent: no memory or thread\n");
+    IBackgroundCopyCallback2_Release(callback);
+}
+
 void processJob(BackgroundCopyJobImpl *job)
 {
     for (;;)
@@ -1293,15 +1334,7 @@ void processJob(BackgroundCopyJobImpl *job)
             }
             LeaveCriticalSection(&job->cs);
 
-            if (callback)
-            {
-                IBackgroundCopyJob4_AddRef(&job->IBackgroundCopyJob4_iface);
-                TRACE("Calling JobTransferred -->\n");
-                IBackgroundCopyCallback2_JobTransferred(callback, (IBackgroundCopyJob*)&job->IBackgroundCopyJob4_iface);
-                TRACE("Called JobTransferred <--\n");
-                IBackgroundCopyCallback2_Release(callback);
-                IBackgroundCopyJob4_Release(&job->IBackgroundCopyJob4_iface);
-            }
+            if (callback) notify_transferred(job, callback);
             return;
         }
 
