@@ -1756,6 +1756,36 @@ static WCHAR * xpath_scan_name(struct xpath_parser_context *ctxt)
    return xpath_strndup(ctxt, start, len);
 }
 
+/* A QName: an NCName, or two joined by a colon. A prefixed function name such as
+ * ms:string-compare has to be read whole to be seen as a function call; an axis (child::)
+ * stops before its colons, as with xpath_scan_name. */
+static WCHAR * xpath_scan_qname(struct xpath_parser_context *ctxt)
+{
+   const WCHAR *start = ctxt->cur;
+   int len = 0;
+
+   if (!xml_is_ncname_startchar(*start))
+       return NULL;
+
+   do
+   {
+       ++len;
+   }
+   while (xml_is_ncnamechar(start[len]));
+
+   if (start[len] == ':' && xml_is_ncname_startchar(start[len + 1]))
+   {
+       ++len;
+       do
+       {
+           ++len;
+       }
+       while (xml_is_ncnamechar(start[len]));
+   }
+
+   return xpath_strndup(ctxt, start, len);
+}
+
 /**
  *  [38]   NodeType ::=   'comment'
  *                    | 'text'
@@ -1812,7 +1842,7 @@ static void xpath_compile_path_expr(struct xpath_parser_context *ctxt)
          *   - a element name
          */
         xpath_parse_skipspaces(ctxt);
-        name = xpath_scan_name(ctxt);
+        name = xpath_scan_qname(ctxt);
         if (name && wcsstr(name, L"::"))
         {
             location_path = true;
@@ -4983,6 +5013,8 @@ static xpath_function_ptr xpath_lookup_function(struct xpath_context *ctxt, cons
     for (size_t i = 0; i < ctxt->functions.count; ++i)
     {
         if (wcscmp(ctxt->functions.entries[i].name, name)) continue;
+        /* A function in a namespace is found only with it, and a core one only without. */
+        if (!uri != !ctxt->functions.entries[i].uri) continue;
         if (uri && wcscmp(ctxt->functions.entries[i].uri, uri)) continue;
         return ctxt->functions.entries[i].func;
     }
@@ -5526,6 +5558,8 @@ struct xpath_object * xpath_eval(const WCHAR *str, struct xpath_context *ctx)
         else if (ctxt->stack.count)
             ERR("Stack not empty\n");
     }
+    else
+        WARN("%s failed: error %d.\n", debugstr_w(str), ctxt->error);
 
     xpath_free_parser_context(ctxt);
     return res;
@@ -7666,6 +7700,63 @@ static void xslpattern_builtin_node_name(struct xpath_parser_context *ctxt, int 
     }
 }
 
+/* ms:string-compare(x, y [, language [, options]]), one of MSXML's XPath extension functions
+ * (urn:schemas-microsoft-com:xslt): -1, 0 or 1 as x sorts before, with or after y, in the
+ * language's order (the user's when it is empty or not given). Options: "i" ignores case; "u"
+ * puts upper case first where the strings differ only in case. */
+static void xpath_ms_string_compare(struct xpath_parser_context *ctxt, int nargs)
+{
+    WCHAR *x = NULL, *y = NULL, *language = NULL, *options = NULL;
+    const WCHAR *locale, *p;
+    BOOL upper_first = FALSE;
+    DWORD flags = 0;
+    int ret;
+
+    if (nargs < 2 || nargs > 4)
+    {
+        xpath_parser_context_set_error(ctxt, XPATH_INVALID_ARITY);
+        return;
+    }
+    if (ctxt->stack.count < nargs)
+    {
+        xpath_parser_context_set_error(ctxt, XPATH_STACK_ERROR);
+        return;
+    }
+
+    if (nargs == 4) options = xpath_pop_string(ctxt);
+    if (nargs >= 3) language = xpath_pop_string(ctxt);
+    y = xpath_pop_string(ctxt);
+    x = xpath_pop_string(ctxt);
+    if (!x || !y) goto done;
+
+    for (p = options; p && *p; p++)
+    {
+        if (*p == 'i') flags |= NORM_IGNORECASE;
+        else if (*p == 'u') upper_first = TRUE;
+        else FIXME("Unknown string-compare option %s.\n", debugstr_w(options));
+    }
+
+    locale = language && *language ? language : LOCALE_NAME_USER_DEFAULT;
+    if (!(ret = CompareStringEx(locale, flags, x, -1, y, -1, NULL, NULL, 0)))
+    {
+        WARN("Comparing in %s failed (%lu), in the user's language instead.\n", debugstr_w(locale), GetLastError());
+        locale = LOCALE_NAME_USER_DEFAULT;
+        ret = CompareStringEx(locale, flags, x, -1, y, -1, NULL, NULL, 0);
+    }
+    ret -= CSTR_EQUAL;
+    if (upper_first && !(flags & NORM_IGNORECASE) && ret &&
+            CompareStringEx(locale, NORM_IGNORECASE, x, -1, y, -1, NULL, NULL, 0) == CSTR_EQUAL)
+        ret = -ret;
+
+    xpath_push_value(ctxt, xpath_new_number(ctxt, ret));
+
+done:
+    free(x);
+    free(y);
+    free(language);
+    free(options);
+}
+
 static void xpath_register_xpath_functions(struct xpath_context *ctxt)
 {
     xpath_register_func(ctxt, L"boolean", xpath_builtin_boolean);
@@ -7695,6 +7786,7 @@ static void xpath_register_xpath_functions(struct xpath_context *ctxt)
     xpath_register_func(ctxt, L"sum", xpath_builtin_sum);
     xpath_register_func(ctxt, L"true", xpath_builtin_true);
     xpath_register_func(ctxt, L"translate", xpath_builtin_translate);
+    xpath_register_func_uri(ctxt, L"string-compare", L"urn:schemas-microsoft-com:xslt", xpath_ms_string_compare);
 }
 
 static void xpath_register_xslpattern_functions(struct xpath_context *ctxt)
