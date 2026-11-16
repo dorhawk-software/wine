@@ -31,6 +31,10 @@
 #define WIDL_using_Windows_Foundation
 #define WIDL_using_Windows_Foundation_Collections
 #include "windows.foundation.h"
+#define WIDL_using_Windows_Devices_Haptics
+#include "windows.devices.haptics.h"
+
+
 #define WIDL_using_Windows_Security_ExchangeActiveSyncProvisioning
 #include "windows.security.exchangeactivesyncprovisioning.h"
 #define WIDL_using_Windows_System_Profile
@@ -71,6 +75,7 @@ extern IActivationFactory *analytics_info_factory;
 extern IActivationFactory *advertising_manager_factory;
 extern IActivationFactory *core_application_factory;
 extern IActivationFactory *data_transfer_manager_statics_factory;
+extern IActivationFactory *haptics_waveforms_factory;
 extern IActivationFactory *retail_info_factory;
 extern IActivationFactory *shared_mode_settings_factory;
 
