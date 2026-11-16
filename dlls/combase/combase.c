@@ -2073,15 +2073,6 @@ HRESULT WINAPI CoSwitchCallContext(IUnknown *context, IUnknown **old_context)
 }
 
 /******************************************************************************
- *          CoRegisterActivationFilter    (combase.@)
- */
-HRESULT WINAPI CoRegisterActivationFilter(IUnknown *filter)
-{
-    TRACE("%p\n", filter);
-    return S_OK;
-}
-
-/******************************************************************************
  *          CoRegisterInitializeSpy    (combase.@)
  */
 HRESULT WINAPI CoRegisterInitializeSpy(IInitializeSpy *spy, ULARGE_INTEGER *cookie)
@@ -3658,7 +3649,8 @@ HRESULT WINAPI CoRegisterActivationFilter(IActivationFilter *filter)
 {
     FIXME("%p stub\n", filter);
 
-    return E_NOTIMPL;
+    /* Soda reports success for its Office support; the filter is never called */
+    return S_OK;
 }
 
 static void com_cleanup_tlsdata(void)

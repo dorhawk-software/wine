@@ -4931,6 +4931,20 @@ static UINT window_min_maximize( HWND hwnd, UINT cmd, RECT *rect )
     return swp_flags;
 }
 
+/* the window's current surface, with a reference (Valve's window_surface_get, for Soda's initial paint) */
+static struct window_surface *window_surface_get( HWND hwnd )
+{
+    struct window_surface *surface = NULL;
+    WND *win = get_win_ptr( hwnd );
+
+    if (win && win != WND_DESKTOP && win != WND_OTHER_PROCESS)
+    {
+        if ((surface = win->surface)) window_surface_add_ref( surface );
+        release_win_ptr( win );
+    }
+    return surface;
+}
+
 /***********************************************************************
  *           NtUserArrangeIconicWindows (win32u.@)
  */

@@ -36,6 +36,7 @@
 #include "winnls.h"
 #include "winternl.h"
 #include "winerror.h"
+#include "winreg.h"
 #include "appmodel.h"
 
 #include "kernelbase.h"

@@ -1271,7 +1271,6 @@ SOURCES = \
 
 INSTALL_LIB = \
 	windows.applicationmodel.winmd \
-	windows.foundation.winmd \
 	windows.globalization.winmd \
 	windows.graphics.winmd \
 	windows.management.winmd \

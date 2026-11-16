@@ -41,8 +41,9 @@
 #define WIDL_using_Windows_UI
 #include "windows.ui.h"
 #define WIDL_using_Windows_UI_Core
-#include "windows.ui.core.h"
+/* before windows.ui.core.h, which includes windows.ui.input.h */
 #define WIDL_using_Windows_UI_Input
+#include "windows.ui.core.h"
 #define WIDL_using_Windows_UI_Composition
 #include "windows.ui.composition.h"
 #define WIDL_using_Windows_UI_Composition_Core
