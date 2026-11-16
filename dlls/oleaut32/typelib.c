@@ -1269,6 +1269,12 @@ static const ICreateTypeInfo2Vtbl CreateTypeInfo2Vtbl;
 static ITypeInfoImpl* ITypeInfoImpl_Constructor(void);
 static void ITypeInfoImpl_Destroy(ITypeInfoImpl *This);
 
+typedef struct
+{
+    TLBString **entries;
+    unsigned int count;
+} TLBStringTable;
+
 typedef struct tagTLBContext
 {
 	unsigned int oStart;  /* start of TLB in file */
@@ -1277,6 +1283,7 @@ typedef struct tagTLBContext
 	void *mapping;        /* memory mapping */
 	MSFT_SegDir * pTblDir;
 	ITypeLibImpl* pLibInfo;
+    TLBStringTable names, strings;
 } TLBContext;
 
 
@@ -2170,32 +2177,57 @@ static HRESULT MSFT_ReadAllNames(TLBContext *pcx)
     }
 }
 
-static TLBString *MSFT_ReadName( TLBContext *pcx, int offset)
+static void MSFT_IndexStrings(struct list *strings, TLBStringTable *table)
 {
-    TLBString *tlbstr;
+    TLBString *str;
+    unsigned int i = 0;
 
-    LIST_FOR_EACH_ENTRY(tlbstr, &pcx->pLibInfo->name_list, TLBString, entry) {
-        if (tlbstr->offset == offset) {
-            TRACE_(typelib)("%s\n", debugstr_w(tlbstr->str));
-            return tlbstr;
-        }
-    }
+    table->count = list_count(strings);
+    table->entries = calloc(table->count, sizeof(*table->entries));
+    if (!table->entries) return;
 
-    return NULL;
+    LIST_FOR_EACH_ENTRY(str, strings, TLBString, entry)
+        table->entries[i++] = str;
 }
 
-static TLBString *MSFT_ReadString( TLBContext *pcx, int offset)
+static int MSFT_CompareStringOffset(const void *key, const void *entry)
 {
-    TLBString *tlbstr;
+    const TLBString *str = *(TLBString * const *)entry;
+    UINT offset = *(const UINT *)key;
 
-    LIST_FOR_EACH_ENTRY(tlbstr, &pcx->pLibInfo->string_list, TLBString, entry) {
-        if (tlbstr->offset == offset) {
-            TRACE_(typelib)("%s\n", debugstr_w(tlbstr->str));
-            return tlbstr;
-        }
+    return offset > str->offset ? 1 : offset < str->offset ? -1 : 0;
+}
+
+static TLBString *MSFT_FindString(TLBStringTable *table, struct list *strings, UINT offset)
+{
+    TLBString *str = NULL, *candidate, **entry;
+
+    if (table->entries)
+    {
+        entry = bsearch(&offset, table->entries, table->count, sizeof(*entry), MSFT_CompareStringOffset);
+        str = entry ? *entry : NULL;
     }
+    else
+    {
+        LIST_FOR_EACH_ENTRY(candidate, strings, TLBString, entry)
+            if (candidate->offset == offset)
+            {
+                str = candidate;
+                break;
+            }
+    }
+    if (str) TRACE_(typelib)("%s\n", debugstr_w(str->str));
+    return str;
+}
 
-    return NULL;
+static TLBString *MSFT_ReadName(TLBContext *pcx, int offset)
+{
+    return MSFT_FindString(&pcx->names, &pcx->pLibInfo->name_list, offset);
+}
+
+static TLBString *MSFT_ReadString(TLBContext *pcx, int offset)
+{
+    return MSFT_FindString(&pcx->strings, &pcx->pLibInfo->string_list, offset);
 }
 
 /*
@@ -3482,6 +3514,10 @@ static ITypeLib2* ITypeLib2_Constructor_MSFT(LPVOID pLib, DWORD dwTLBLength)
     MSFT_ReadAllStrings(&cx);
     MSFT_ReadAllGuids(&cx);
 
+    /* Name and string records are read in increasing file-offset order. */
+    MSFT_IndexStrings(&pTypeLibImpl->name_list, &cx.names);
+    MSFT_IndexStrings(&pTypeLibImpl->string_list, &cx.strings);
+
     /* now fill our internal data */
     /* TLIBATTR fields */
     pTypeLibImpl->guid = MSFT_ReadGuid(tlbHeader.posguid, &cx);
@@ -3640,6 +3676,8 @@ static ITypeLib2* ITypeLib2_Constructor_MSFT(LPVOID pLib, DWORD dwTLBLength)
             TLB_fix_typeinfo_ptr_size(pTypeLibImpl->typeinfos[i]);
     }
 
+    free(cx.names.entries);
+    free(cx.strings.entries);
     TRACE("(%p)\n", pTypeLibImpl);
     return &pTypeLibImpl->ITypeLib2_iface;
 }
