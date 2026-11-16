@@ -406,6 +406,27 @@ static BOOL is_root_pnp_service(HDEVINFO set, const struct service_entry *servic
     return FALSE;
 }
 
+/* On Windows, lsass runs before any service starts (wininit starts it). Wine's lsass is the SamSs
+ * service, which secur32 starts on demand through this service manager; during the start-up loop
+ * below that request waits for the start-up lock and gives up after 3 seconds, so an automatic
+ * service that uses security at start had no packages at all (Microsoft 365's Click-to-Run: NTLM
+ * on local RPC failed with RPC_S_UNKNOWN_AUTHN_SERVICE). So lsass starts first. */
+static void scmdatabase_start_lsass(struct scmdatabase *db)
+{
+    struct service_entry *service;
+    DWORD err;
+
+    scmdatabase_lock(db);
+    service = grab_service(scmdatabase_find_service(db, L"SamSs"));
+    scmdatabase_unlock(db);
+    if (!service) return;
+
+    if (service->config.dwStartType != SERVICE_DISABLED &&
+        (err = service_start(service, 0, NULL)) != ERROR_SUCCESS && err != ERROR_SERVICE_ALREADY_RUNNING)
+        WINE_FIXME("lsass (SamSs) failed to start: %ld\n", err);
+    release_service(service);
+}
+
 static void scmdatabase_autostart_services(struct scmdatabase *db)
 {
     struct service_entry **services_list;
@@ -448,6 +469,7 @@ static void scmdatabase_autostart_services(struct scmdatabase *db)
     scmdatabase_unlock(db);
     qsort(services_list, size, sizeof(services_list[0]), compare_service);
     scmdatabase_lock_startup(db, INFINITE);
+    scmdatabase_start_lsass(db);
 
     for (i = 0; i < size; i++)
     {
