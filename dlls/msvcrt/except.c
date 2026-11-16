@@ -1090,6 +1090,24 @@ int* CDECL __processing_throw(void)
                (char *)base + table->ScopeRecord[i].JumpTarget );   \
 } while(0)
 
+/* Clang can split one __try into several scope entries that share its handler (the code of a
+ * nested __except lands in a range of its own). As in Windows' own handler, an unwind target in
+ * any of them is inside that __try, so its __finally must not run on the way there. */
+static inline BOOL is_target_in_scope( const SCOPE_TABLE *table, ULONG_PTR base, ULONG_PTR target,
+                                       unsigned int scope )
+{
+    unsigned int i;
+
+    for (i = 0; i < table->Count; i++)
+    {
+        if (table->ScopeRecord[i].HandlerAddress != table->ScopeRecord[scope].HandlerAddress) continue;
+        if (table->ScopeRecord[i].JumpTarget != table->ScopeRecord[scope].JumpTarget) continue;
+        if (target >= base + table->ScopeRecord[i].BeginAddress &&
+            target < base + table->ScopeRecord[i].EndAddress) return TRUE;
+    }
+    return FALSE;
+}
+
 LONG __C_ExecuteExceptionFilter( EXCEPTION_POINTERS *ptrs, void *frame, PEXCEPTION_FILTER filter, BYTE *nonvolatile );
 #endif
 
@@ -1123,8 +1141,7 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
             if (table->ScopeRecord[i].JumpTarget) continue;
 
             if (rec->ExceptionFlags & EXCEPTION_TARGET_UNWIND &&
-                dispatch->TargetPc >= base + table->ScopeRecord[i].BeginAddress &&
-                dispatch->TargetPc < base + table->ScopeRecord[i].EndAddress)
+                is_target_in_scope( table, base, dispatch->TargetPc, i ))
             {
                 break;
             }
@@ -1201,8 +1218,7 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
             if (table->ScopeRecord[i].JumpTarget) continue;
 
             if (rec->ExceptionFlags & EXCEPTION_TARGET_UNWIND &&
-                dispatch->TargetPc >= base + table->ScopeRecord[i].BeginAddress &&
-                dispatch->TargetPc < base + table->ScopeRecord[i].EndAddress)
+                is_target_in_scope( table, base, dispatch->TargetPc, i ))
             {
                 break;
             }
@@ -1278,8 +1294,7 @@ EXCEPTION_DISPOSITION WINAPI __C_specific_handler( EXCEPTION_RECORD *rec, void *
             if (table->ScopeRecord[i].JumpTarget) continue;
 
             if (rec->ExceptionFlags & EXCEPTION_TARGET_UNWIND &&
-                dispatch->TargetIp >= base + table->ScopeRecord[i].BeginAddress &&
-                dispatch->TargetIp < base + table->ScopeRecord[i].EndAddress)
+                is_target_in_scope( table, base, dispatch->TargetIp, i ))
             {
                 break;
             }
