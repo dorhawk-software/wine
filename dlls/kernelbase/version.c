@@ -43,6 +43,9 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(ver);
 
+static const WCHAR packages_key_name[] = L"Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows"
+        L"\\CurrentVersion\\AppModel\\PackageRepository\\Packages";
+
 typedef struct
 {
     WORD offset;
@@ -1625,17 +1628,111 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFamilyName( HANDLE process, UINT32
 /***********************************************************************
  *         GetPackagesByPackageFamily   (kernelbase.@)
  */
-LONG WINAPI DECLSPEC_HOTPATCH GetPackagesByPackageFamily(const WCHAR *family_name, UINT32 *count,
-                                                         WCHAR *full_names, UINT32 *buffer_len, WCHAR *buffer)
+LONG WINAPI GetPackagesByPackageFamily(const WCHAR *family_name, UINT32 *count, WCHAR **full_names,
+        UINT32 *buffer_length, WCHAR *buffer)
 {
-    FIXME( "(%s %p %p %p %p): stub\n", debugstr_w(family_name), count, full_names, buffer_len, buffer );
+    UINT32 curr_count, curr_length, package_id_buf_size, size;
+    unsigned int i, name_len, publisher_id_len;
+    DWORD subkey_count, max_key_len, length;
+    const WCHAR *publisher_id;
+    WCHAR *package_name;
+    BOOL short_buffer;
+    PACKAGE_ID *id;
+    HKEY key;
 
-    if (!count || !buffer_len)
+    TRACE("family_name %s, count %p, full_names %p, buffer_length %p, buffer %p.\n",
+            debugstr_w(family_name), count, full_names, buffer_length, buffer);
+
+    if (!buffer_length || !count || !family_name)
         return ERROR_INVALID_PARAMETER;
 
-    *count = 0;
-    *buffer_len = 0;
-    return ERROR_SUCCESS;
+    if ((*buffer_length || *count) && (!full_names || !buffer))
+        return ERROR_INVALID_PARAMETER;
+
+    if (!(publisher_id = wcschr(family_name, L'_')))
+        return ERROR_INVALID_PARAMETER;
+
+    name_len = publisher_id - family_name;
+    ++publisher_id;
+    publisher_id_len = lstrlenW(publisher_id);
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, packages_key_name, 0, KEY_READ, &key))
+    {
+        ERR("Key open failed.\n");
+        *count = 0;
+        *buffer_length = 0;
+        return ERROR_SUCCESS;
+    }
+    if (RegQueryInfoKeyW(key, NULL, NULL, NULL, &subkey_count, &max_key_len, NULL, NULL, NULL, NULL, NULL, NULL))
+    {
+        ERR("Query key info failed.\n");
+        RegCloseKey(key);
+        *count = 0;
+        *buffer_length = 0;
+        return ERROR_SUCCESS;
+    }
+
+    if (!(package_name = HeapAlloc(GetProcessHeap(), 0, (max_key_len + 1) * sizeof(*package_name))))
+    {
+        ERR("No memory.\n");
+        RegCloseKey(key);
+        return ERROR_OUTOFMEMORY;
+    }
+
+    package_id_buf_size = sizeof(*id) + (max_key_len + 1) * sizeof(WCHAR);
+    if (!(id = HeapAlloc(GetProcessHeap(), 0, package_id_buf_size)))
+    {
+        ERR("No memory.\n");
+        HeapFree(GetProcessHeap(), 0, package_name);
+        RegCloseKey(key);
+        return ERROR_OUTOFMEMORY;
+    }
+
+    curr_count = curr_length = 0;
+    for (i = 0; i < subkey_count; ++i)
+    {
+        length = max_key_len + 1;
+        if (RegEnumKeyExW(key, i, package_name, &length, NULL, NULL, NULL, NULL))
+        {
+            ERR("Error enumerating key %u.\n", i);
+            continue;
+        }
+
+        size = package_id_buf_size;
+        if (PackageIdFromFullName(package_name, 0, &size, (BYTE *)id))
+        {
+            ERR("Error getting package id from full name.\n");
+            continue;
+        }
+
+        if (lstrlenW(id->name) != name_len)
+            continue;
+        if (wcsnicmp(family_name, id->name, name_len))
+            continue;
+
+        if (lstrlenW(id->publisherId) != publisher_id_len)
+            continue;
+        if (wcsnicmp(publisher_id, id->publisherId, publisher_id_len))
+            continue;
+        if (curr_length + length < *buffer_length)
+        {
+            memcpy(buffer + curr_length, package_name, (length + 1) * sizeof(*package_name));
+            if (curr_count < *count)
+                full_names[curr_count] = buffer + curr_length;
+        }
+        curr_length += length + 1;
+        ++curr_count;
+    }
+
+    HeapFree(GetProcessHeap(), 0, id);
+    HeapFree(GetProcessHeap(), 0, package_name);
+    RegCloseKey(key);
+
+    short_buffer = curr_length > *buffer_length || curr_count > *count;
+    *count = curr_count;
+    *buffer_length = curr_length;
+
+    return short_buffer ? ERROR_INSUFFICIENT_BUFFER : ERROR_SUCCESS;
 }
 
 /***********************************************************************
@@ -1854,4 +1951,107 @@ LONG WINAPI PackageFullNameFromId(const PACKAGE_ID *id, UINT32 *length, WCHAR *b
     *length = len + 1;
 
     return ERROR_SUCCESS;
+}
+
+/***********************************************************************
+ *         FindPackagesByPackageFamily   (kernelbase.@)
+ */
+LONG WINAPI FindPackagesByPackageFamily(const WCHAR *family_name, UINT32 filters, UINT32 *count,
+        WCHAR **full_names, UINT32 *buffer_length, WCHAR *buffer, UINT32 *properties)
+{
+    UINT32 capacity, i;
+    LONG ret;
+
+    TRACE("family_name %s, filters %#x, count %p, full_names %p, buffer_length %p, buffer %p, properties %p.\n",
+            debugstr_w(family_name), filters, count, full_names, buffer_length, buffer, properties);
+
+    if (!count || !buffer_length) return ERROR_INVALID_PARAMETER;
+
+    capacity = *count;
+    ret = GetPackagesByPackageFamily(family_name, count, full_names, buffer_length, buffer);
+    if (properties && full_names && buffer && (ret == ERROR_SUCCESS || ret == ERROR_INSUFFICIENT_BUFFER))
+        for (i = 0; i < min(capacity, *count); ++i) properties[i] = 0;
+
+    return ret;
+}
+
+/***********************************************************************
+ *         GetPackagePath   (kernelbase.@)
+ */
+LONG WINAPI GetPackagePath(const PACKAGE_ID *package_id, const UINT32 reserved, UINT32 *length, WCHAR *path)
+{
+    WCHAR *key_name = NULL, *expanded_path = NULL;
+    UINT32 required_length, have_length;
+    unsigned int offset;
+    HKEY key = NULL;
+    DWORD size;
+    LONG ret;
+
+    TRACE("package_id %p, reserved %u, length %p, path %p.\n", package_id, reserved, length, path);
+
+    if (!length)
+        return ERROR_INVALID_PARAMETER;
+    if (!path && *length)
+        return ERROR_INVALID_PARAMETER;
+
+    required_length = 0;
+    if ((ret = PackageFullNameFromId(package_id, &required_length, NULL)) != ERROR_INSUFFICIENT_BUFFER)
+        return ret;
+
+    offset = lstrlenW(packages_key_name) + 1;
+    if (!(key_name = HeapAlloc(GetProcessHeap(), 0, (offset + required_length) * sizeof(WCHAR))))
+    {
+        ERR("No memory.");
+        return ERROR_OUTOFMEMORY;
+    }
+
+    if ((ret = PackageFullNameFromId(package_id, &required_length, key_name + offset)))
+        goto done;
+
+    memcpy(key_name, packages_key_name, (offset - 1) * sizeof(WCHAR));
+    key_name[offset - 1] = L'\\';
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, key_name, 0, KEY_READ, &key))
+    {
+        WARN("Key %s not found.\n", debugstr_w(key_name));
+        ret = ERROR_NOT_FOUND;
+        goto done;
+    }
+    if (RegGetValueW(key, NULL, L"Path", RRF_RT_REG_SZ, NULL, NULL, &size))
+    {
+        WARN("Path value not found in %s.\n", debugstr_w(key_name));
+        ret = ERROR_NOT_FOUND;
+        goto done;
+    }
+    if (!(expanded_path = HeapAlloc(GetProcessHeap(), 0, size)))
+    {
+        ERR("No memory.");
+        ret = ERROR_OUTOFMEMORY;
+        goto done;
+    }
+    if (RegGetValueW(key, NULL, L"Path", RRF_RT_REG_SZ, NULL, expanded_path, &size))
+    {
+        WARN("Could not get Path value from %s.\n", debugstr_w(key_name));
+        ret = ERROR_NOT_FOUND;
+        goto done;
+    }
+
+    have_length = *length;
+    *length = lstrlenW(expanded_path) + 1;
+    if (have_length >= *length)
+    {
+        memcpy(path, expanded_path, *length * sizeof(*path));
+        ret = ERROR_SUCCESS;
+    }
+    else
+    {
+        ret = ERROR_INSUFFICIENT_BUFFER;
+    }
+
+done:
+    if (key)
+        RegCloseKey(key);
+    HeapFree(GetProcessHeap(), 0, expanded_path);
+    HeapFree(GetProcessHeap(), 0, key_name);
+    return ret;
 }
