@@ -1441,6 +1441,15 @@ HRESULT WINAPI SoftpubCleanup(CRYPT_PROVIDER_DATA *data)
         CertCloseStore(data->pahStores[i], 0);
     data->psPfns->pfnFree(data->pahStores);
 
+    /* The file SOFTPUB_OpenFile opened is closed through the handle kept in the SIP subject:
+     * when the state is closed later, the caller may already have freed the WINTRUST_DATA and
+     * WINTRUST_FILE_INFO it verified with (Click-to-Run does), so they mustn't be touched. */
+    if (data->fOpenedFile && data->pPDSip && data->pPDSip->psSipSubjectInfo)
+    {
+        CloseHandle(data->pPDSip->psSipSubjectInfo->hFile);
+        data->fOpenedFile = FALSE;
+    }
+
     if (data->pPDSip)
     {
         data->psPfns->pfnFree(data->pPDSip->pSip);
@@ -1458,15 +1467,6 @@ HRESULT WINAPI SoftpubCleanup(CRYPT_PROVIDER_DATA *data)
         data->psPfns->pfnFree(data->pSigState);
     }
     CryptMsgClose(data->hMsg);
-
-    if (data->fOpenedFile &&
-     data->pWintrustData->dwUnionChoice == WTD_CHOICE_FILE &&
-     data->pWintrustData->pFile)
-    {
-        CloseHandle(data->pWintrustData->pFile->hFile);
-        data->pWintrustData->pFile->hFile = INVALID_HANDLE_VALUE;
-        data->fOpenedFile = FALSE;
-    }
 
     return S_OK;
 }

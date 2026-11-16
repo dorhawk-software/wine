@@ -323,12 +323,20 @@ static LONG WINTRUST_DefaultClose(HWND hwnd, GUID *actionID,
 static LONG WINTRUST_DefaultVerifyAndClose(HWND hwnd, GUID *actionID,
  WINTRUST_DATA *data)
 {
+    CRYPT_PROVIDER_DATA *provData;
+    BOOL opened_file;
     LONG err;
 
     TRACE("(%p, %s, %p)\n", hwnd, debugstr_guid(actionID), data);
 
     err = WINTRUST_DefaultVerify(hwnd, actionID, data);
+    provData = data->hWVTStateData;
+    opened_file = provData && provData->fOpenedFile;
     WINTRUST_DefaultClose(hwnd, actionID, data);
+    /* The caller's data is still alive in this one call, so the handle wintrust opened and
+     * closed for it is cleared there too, as before; a later close can't do that safely. */
+    if (opened_file && data->dwUnionChoice == WTD_CHOICE_FILE && data->pFile)
+        data->pFile->hFile = INVALID_HANDLE_VALUE;
     TRACE("returning %08lx\n", err);
     return err;
 }
