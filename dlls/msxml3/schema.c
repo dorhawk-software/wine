@@ -921,7 +921,9 @@ static xmlDocPtr create_xmldoc_for_text(BSTR xml)
     xmlChar *str = xmlchar_from_wchar(xml);
     xmlDocPtr doc;
 
-    doc = xmlParseMemory((const char *)str, xmlStrlen(str));
+    /* The text is already decoded, and is UTF-8 here whatever its declaration says: a schema
+     * declared encoding="utf-16" (App-V's) would otherwise be read as UTF-16 and fail to parse. */
+    doc = xmlReadMemory((const char *)str, xmlStrlen(str), NULL, "UTF-8", XML_PARSE_IGNORE_ENC);
     free(str);
     return doc;
 }
