@@ -537,7 +537,8 @@ static void process_unwind_codes( BYTE *ptr, BYTE *end, ARM64_NT_CONTEXT *contex
 }
 
 static void *unwind_packed_data( ULONG_PTR base, ULONG_PTR pc, ARM64_RUNTIME_FUNCTION *func,
-                                 ARM64_NT_CONTEXT *context, KNONVOLATILE_CONTEXT_POINTERS_ARM64 *ptrs )
+                                 ARM64_NT_CONTEXT *context, KNONVOLATILE_CONTEXT_POINTERS_ARM64 *ptrs,
+                                 BOOL in_body )
 {
     int i;
     unsigned int len, offset;
@@ -660,7 +661,7 @@ static void *unwind_packed_data( ULONG_PTR base, ULONG_PTR pc, ARM64_RUNTIME_FUN
     prologue_end = &prologue[ppos];
     epilogue_end = &epilogue[epos];
 
-    if (func->Flag == 1)
+    if (func->Flag == 1 && !in_body)
     {
         if (offset < (prologue_end - prologue) || offset >= func->FunctionLength - (epilogue_end - epilogue))
         {
@@ -689,7 +690,7 @@ static void *unwind_packed_data( ULONG_PTR base, ULONG_PTR pc, ARM64_RUNTIME_FUN
 static void *unwind_full_data( ULONG_PTR base, ULONG_PTR pc, ARM64_RUNTIME_FUNCTION *func,
                                ARM64_NT_CONTEXT *context, PVOID *handler_data,
                                KNONVOLATILE_CONTEXT_POINTERS_ARM64 *ptrs,
-                               BOOLEAN *final_pc_from_lr )
+                               BOOLEAN *final_pc_from_lr, BOOL in_body )
 {
     IMAGE_ARM64_RUNTIME_FUNCTION_ENTRY_XDATA *info;
     struct unwind_info_epilog *info_epilog;
@@ -718,6 +719,8 @@ static void *unwind_full_data( ULONG_PTR base, ULONG_PTR pc, ARM64_RUNTIME_FUNCT
            base + func->BeginAddress, base + func->BeginAddress + info->FunctionLength * 4,
            info->FunctionLength, info->Version, info->ExceptionDataPresent, info->EpilogInHeader,
            epilogs, codes * 4 );
+
+    if (in_body) goto body;
 
     /* check for prolog */
     if (offset < codes * 4)
@@ -759,6 +762,7 @@ static void *unwind_full_data( ULONG_PTR base, ULONG_PTR pc, ARM64_RUNTIME_FUNCT
         }
     }
 
+body:
     process_unwind_codes( data, end, context, ptrs, 0, final_pc_from_lr );
 
     /* get handler since we are inside the main code */
@@ -784,7 +788,16 @@ static ARM64_RUNTIME_FUNCTION *find_function_info_arm64( ULONG_PTR pc, ULONG_PTR
 
         if (pc >= start)
         {
-            ULONG len = func[pos].Flag ? func[pos].FunctionLength :
+            ULONG len;
+
+            /* A link record (a jump island) has no length: the island runs to the next record. */
+            if (func[pos].Flag == 3)
+            {
+                if (pos + 1 == count || pc < base + func[pos + 1].BeginAddress) return func + pos;
+                min = pos + 1;
+                continue;
+            }
+            len = func[pos].Flag ? func[pos].FunctionLength :
                 ((IMAGE_ARM64_RUNTIME_FUNCTION_ENTRY_XDATA *)(base + func[pos].UnwindData))->FunctionLength;
             if (pc < start + 4 * len) return func + pos;
             min = pos + 1;
@@ -814,6 +827,8 @@ NTSTATUS WINAPI RtlVirtualUnwind2( ULONG type, ULONG_PTR base, ULONG_PTR pc,
     BOOLEAN final_pc_from_lr = TRUE;
     PEXCEPTION_ROUTINE handler;
     void *data = NULL;
+    BOOL in_body = FALSE;
+    int links;
 
     TRACE( "type %lx base %I64x pc %I64x rva %I64x sp %I64x\n", type, base, pc, pc - base, context->Sp );
     if (limit_low || limit_high) FIXME( "limits not supported\n" );
@@ -831,12 +846,26 @@ NTSTATUS WINAPI RtlVirtualUnwind2( ULONG type, ULONG_PTR base, ULONG_PTR pc,
         return STATUS_SUCCESS;
     }
 
+    /* Flag 3 links a jump island to its parent's record; the island is part of the
+     * parent's body (Microsoft, "Arm64 exception handling", .pdata record links). */
+    for (links = 0; func->Flag == 3; links++)
+    {
+        if (links == 8)
+        {
+            WARN( "link records loop at %I64x\n", pc );
+            return STATUS_BAD_FUNCTION_TABLE;
+        }
+        TRACE( "link to the record at rva %lx\n", func->UnwindData & ~3 );
+        func = (ARM64_RUNTIME_FUNCTION *)(base + (func->UnwindData & ~3));
+        in_body = TRUE;
+    }
+
     __TRY
     {
         if (func->Flag)
-            handler = unwind_packed_data( base, pc, func, context, ctx_ptr );
+            handler = unwind_packed_data( base, pc, func, context, ctx_ptr, in_body );
         else
-            handler = unwind_full_data( base, pc, func, context, &data, ctx_ptr, &final_pc_from_lr );
+            handler = unwind_full_data( base, pc, func, context, &data, ctx_ptr, &final_pc_from_lr, in_body );
 
         if (final_pc_from_lr) context->Pc = context->Lr;
         *frame_ret = context->Sp;
