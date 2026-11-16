@@ -586,6 +586,7 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH RtlFlsFree( ULONG index )
     unsigned int chunk_index, idx;
     FLS_INFO_CHUNK *chunk;
     LIST_ENTRY *entry;
+    BOOL called;
 
     lock_fls_data();
 
@@ -603,22 +604,26 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH RtlFlsFree( ULONG index )
         return STATUS_INVALID_PARAMETER;
     }
 
-    for (entry = fls_data.fls_list_head.Flink; entry != &fls_data.fls_list_head; entry = entry->Flink)
+    do
     {
-        TEB_FLS_DATA *fls = CONTAINING_RECORD(entry, TEB_FLS_DATA, fls_list_entry);
-
-        if (fls->fls_data_chunks[chunk_index] && fls->fls_data_chunks[chunk_index][idx + 1])
+        called = FALSE;
+        for (entry = fls_data.fls_list_head.Flink; entry != &fls_data.fls_list_head; entry = entry->Flink)
         {
-            if (callback != (void *)~(ULONG_PTR)0)
-            {
-                TRACE_(relay)("Calling FLS callback %p, arg %p.\n", callback,
-                        fls->fls_data_chunks[chunk_index][idx + 1]);
+            TEB_FLS_DATA *fls = CONTAINING_RECORD(entry, TEB_FLS_DATA, fls_list_entry);
+            void *value;
 
-                callback( fls->fls_data_chunks[chunk_index][idx + 1] );
+            if (fls->fls_data_chunks[chunk_index] && (value = fls->fls_data_chunks[chunk_index][idx + 1]))
+            {
+                fls->fls_data_chunks[chunk_index][idx + 1] = NULL;
+                if (callback != (void *)~(ULONG_PTR)0)
+                {
+                    TRACE_(relay)("Calling FLS callback %p, arg %p.\n", callback, value);
+                    callback( value );
+                    called = TRUE;
+                }
             }
-            fls->fls_data_chunks[chunk_index][idx + 1] = NULL;
         }
-    }
+    } while (called);
 
     --chunk->count;
     chunk->callbacks[idx].callback = NULL;
