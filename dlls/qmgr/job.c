@@ -19,6 +19,8 @@
  */
 
 #include <stdarg.h>
+#include <string.h>
+#include <wchar.h>
 
 #include "windef.h"
 #include "winbase.h"
@@ -858,8 +860,63 @@ static HRESULT WINAPI BackgroundCopyJob_AddFileWithRanges(
     DWORD RangeCount,
     BG_FILE_RANGE Ranges[])
 {
-    FIXME("%p, %s, %s, %lu, %p: stub\n", iface, debugstr_w(RemoteUrl), debugstr_w(LocalName), RangeCount, Ranges);
-    return S_OK;
+    BackgroundCopyJobImpl *job = impl_from_IBackgroundCopyJob4(iface);
+    BackgroundCopyFileImpl *file;
+    BG_FILE_RANGE *sorted;
+    HRESULT hr = S_OK;
+    DWORD i, j;
+
+    TRACE("%p, %s, %s, %lu, %p.\n", iface, debugstr_w(RemoteUrl), debugstr_w(LocalName), RangeCount, Ranges);
+
+    if (!RangeCount || !Ranges || !RemoteUrl || !LocalName) return E_INVALIDARG;
+    if (job->type != BG_JOB_TYPE_DOWNLOAD) return E_NOTIMPL;
+    /* Since BITS 3.0 only HTTP has ranges. */
+    if (wcsnicmp(RemoteUrl, L"http://", 7) && wcsnicmp(RemoteUrl, L"https://", 8)) return E_INVALIDARG;
+    for (i = 0; i < RangeCount; i++)
+        if (Ranges[i].InitialOffset == BG_LENGTH_TO_EOF) return BG_E_INVALID_RANGE;
+
+    /* No two ranges may share or overlap bytes: sorted by offset, each must end before the next. */
+    if (!(sorted = malloc(RangeCount * sizeof(*sorted)))) return E_OUTOFMEMORY;
+    for (i = 0; i < RangeCount; i++)
+    {
+        for (j = i; j > 0 && sorted[j - 1].InitialOffset > Ranges[i].InitialOffset; j--)
+            sorted[j] = sorted[j - 1];
+        sorted[j] = Ranges[i];
+    }
+    for (i = 1; i < RangeCount && hr == S_OK; i++)
+    {
+        const BG_FILE_RANGE *prev = &sorted[i - 1];
+        if (prev->InitialOffset == sorted[i].InitialOffset || prev->Length == BG_LENGTH_TO_EOF ||
+            prev->InitialOffset + prev->Length > sorted[i].InitialOffset)
+            hr = BG_E_OVERLAPPING_RANGES;
+    }
+    free(sorted);
+    if (hr != S_OK) return hr;
+
+    EnterCriticalSection(&job->cs);
+
+    if (job->state == BG_JOB_STATE_CANCELLED || job->state == BG_JOB_STATE_ACKNOWLEDGED)
+        hr = BG_E_INVALID_STATE;
+    else if ((hr = BackgroundCopyFileConstructor(job, RemoteUrl, LocalName, &file)) == S_OK)
+    {
+        if (!(file->ranges = malloc(RangeCount * sizeof(*file->ranges))))
+        {
+            IBackgroundCopyFile2_Release(&file->IBackgroundCopyFile2_iface);
+            hr = E_OUTOFMEMORY;
+        }
+        else
+        {
+            /* Kept in the order given: that is the order they're written to the local file. */
+            memcpy(file->ranges, Ranges, RangeCount * sizeof(*file->ranges));
+            file->range_count = RangeCount;
+            list_add_head(&job->files, &file->entryFromJob);
+            job->jobProgress.BytesTotal = BG_SIZE_UNKNOWN;
+            ++job->jobProgress.FilesTotal;
+        }
+    }
+
+    LeaveCriticalSection(&job->cs);
+    return hr;
 }
 
 static HRESULT WINAPI BackgroundCopyJob_SetFileACLFlags(IBackgroundCopyJob4 *iface, DWORD flags)

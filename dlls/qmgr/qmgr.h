@@ -79,6 +79,9 @@ typedef struct
     struct list entryFromJob;
     BackgroundCopyJobImpl *owner;
     DWORD read_size;
+    /* AddFileWithRanges: the ranges in the order given, written one after another */
+    DWORD range_count;
+    BG_FILE_RANGE *ranges;
 } BackgroundCopyFileImpl;
 
 /* Background copy manager vtbl and related data */
