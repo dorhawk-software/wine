@@ -6244,6 +6244,23 @@ struct alpc_create_port_reply
 };
 
 
+struct load_app_hive_request
+{
+    struct request_header __header;
+    obj_handle_t file;
+    unsigned int flags;
+    unsigned int access;
+    unsigned int created;
+    char __pad_28[4];
+};
+struct load_app_hive_reply
+{
+    struct reply_header __header;
+    obj_handle_t hkey;
+    char __pad_12[4];
+};
+
+
 enum request
 {
     REQ_new_process,
@@ -6554,6 +6571,7 @@ enum request
     REQ_d3dkmt_mutex_acquire,
     REQ_d3dkmt_mutex_release,
     REQ_alpc_create_port,
+    REQ_load_app_hive,
     REQ_NB_REQUESTS
 };
 
@@ -6869,6 +6887,7 @@ union generic_request
     struct d3dkmt_mutex_acquire_request d3dkmt_mutex_acquire_request;
     struct d3dkmt_mutex_release_request d3dkmt_mutex_release_request;
     struct alpc_create_port_request alpc_create_port_request;
+    struct load_app_hive_request load_app_hive_request;
 };
 union generic_reply
 {
@@ -7182,8 +7201,9 @@ union generic_reply
     struct d3dkmt_mutex_acquire_reply d3dkmt_mutex_acquire_reply;
     struct d3dkmt_mutex_release_reply d3dkmt_mutex_release_reply;
     struct alpc_create_port_reply alpc_create_port_reply;
+    struct load_app_hive_reply load_app_hive_reply;
 };
 
-#define SERVER_PROTOCOL_VERSION 962
+#define SERVER_PROTOCOL_VERSION 963
 
 #endif /* __WINE_WINE_SERVER_PROTOCOL_H */

@@ -4340,3 +4340,13 @@ enum inproc_sync_type
 @REPLY
     obj_handle_t        handle;         /* handle to the ALPC port */
 @END
+
+/* Load a private or shared application registry hive. */
+@REQ(load_app_hive)
+    obj_handle_t file;
+    unsigned int flags;
+    unsigned int access;
+    unsigned int created;
+@REPLY
+    obj_handle_t hkey;
+@END
