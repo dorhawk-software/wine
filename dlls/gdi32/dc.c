@@ -198,6 +198,9 @@ static struct graphics_driver *create_driver( HMODULE module )
 
 #ifdef __i386__
 static const WCHAR printer_env[] = L"w32x86";
+#elif defined __arm64ec__
+/* x64 code on ARM64 uses the native printer environment (winspool's env_arch) */
+static const WCHAR printer_env[] = L"arm64";
 #elif defined __x86_64__
 static const WCHAR printer_env[] = L"x64";
 #elif defined __arm__

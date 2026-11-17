@@ -323,6 +323,10 @@ static const printenv_t * const all_printenv[] = {&env_x86, &env_x64, &env_ia64,
 
 #ifdef __i386__
 #define env_arch env_x86
+#elif defined __arm64ec__
+/* x64 code on ARM64 runs in the native process, as on Windows: the printer environment is the
+ * native one, whose driver and print processor are built for both (ARM64X). */
+#define env_arch env_arm64
 #elif defined __x86_64__
 #define env_arch env_x64
 #elif defined __arm__
