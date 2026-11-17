@@ -2015,6 +2015,10 @@ void macdrv_window_frame_settled(HWND hwnd)
         TRACE("%p no longer fills a display: it restores to %s\n", hwnd, wine_dbgstr_rect(&window));
         NtUserSetRawWindowPos(hwnd, window, 0, TRUE);
         NtUserSetThreadDpiAwarenessContext(context);
+        /* The restore is part of the tool's move or size, as on Windows when a maximized window is
+         * dragged or snapped: it comes between WM_ENTERSIZEMOVE and WM_EXITSIZEMOVE, so a program
+         * that saves its placement at the end of one hears it. */
+        send_message(hwnd, WM_ENTERSIZEMOVE, 0, 0);
         /* restored now, not when a posted command arrives, to place it below */
         if (!(NtUserGetWindowLongW(hwnd, GWL_STYLE) & WS_DISABLED))
             send_message(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0);
@@ -2034,6 +2038,7 @@ void macdrv_window_frame_settled(HWND hwnd)
                 NtUserSetRawWindowPos(hwnd, again, SWP_NOACTIVATE | SWP_NOZORDER, FALSE);
             }
         }
+        send_message(hwnd, WM_EXITSIZEMOVE, 0, 0);
         return;
     }
     if (!same_display)
