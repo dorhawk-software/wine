@@ -1151,6 +1151,14 @@ static NSString* WineLocalizedString(unsigned int stringID)
     - (void) setApplicationIconFromCGImageArray:(NSArray*)images
     {
         NSImage* nsimage = nil;
+        NSBundle* bundle = [NSBundle mainBundle];
+        NSString* iconFile = [bundle objectForInfoDictionaryKey:@"CFBundleIconFile"];
+
+        /* A program started from a bundle of its own with an icon (a launcher's, which may draw the
+         * program's icon as it wants it in the Dock) keeps that icon: the default image is the
+         * bundle's. */
+        if ([iconFile isKindOfClass:[NSString class]] && [bundle pathForImageResource:iconFile])
+            images = nil;
 
         if ([images count])
         {
