@@ -42,6 +42,7 @@ bool capture_displays_for_fullscreen = false;
 bool allow_vsync = true;
 bool allow_set_gamma = true;
 bool left_option_is_alt = false;
+BOOL decorated_mode = TRUE;
 bool right_option_is_alt = false;
 bool left_command_is_ctrl = false;
 bool right_command_is_ctrl = false;
@@ -383,6 +384,29 @@ static void setup_options(void)
 
     retina_on = retina_enabled;
 
+    if (appkey) NtClose(appkey);
+    if (hkey) NtClose(hkey);
+
+    /* win32u's "Decorated" option, read as win32u reads it: with it off, Wine draws no window's
+       frame, so every window draws its own (see draws_own_frame).
+       @@ Wine registry key: HKCU\Software\Wine\X11 Driver
+       @@ Wine registry key: HKCU\Software\Wine\AppDefaults\app.exe\X11 Driver */
+    appkey = 0;
+    hkey = open_hkcu_key("Software\\Wine\\X11 Driver");
+    if (len && len < MAX_PATH)
+    {
+        static const WCHAR x11driverW[] = {'\\','X','1','1',' ','D','r','i','v','e','r',0};
+        HKEY tmpkey;
+        memcpy(buffer, appname, len * sizeof(WCHAR));
+        memcpy(buffer + len, x11driverW, sizeof(x11driverW));
+        if ((tmpkey = open_hkcu_key("Software\\Wine\\AppDefaults")))
+        {
+            appkey = reg_open_key(tmpkey, buffer, lstrlenW(buffer) * sizeof(WCHAR));
+            NtClose(tmpkey);
+        }
+    }
+    if (!get_config_key(hkey, appkey, "Decorated", buffer, sizeof(buffer)))
+        decorated_mode = IS_OPTION_TRUE(buffer[0]);
     if (appkey) NtClose(appkey);
     if (hkey) NtClose(hkey);
 }

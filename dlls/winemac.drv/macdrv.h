@@ -214,6 +214,7 @@ extern UINT macdrv_GetKeyboardLayoutList(INT size, HKL *list);
 extern INT macdrv_GetKeyNameText(LONG lparam, LPWSTR buffer, INT size);
 extern void macdrv_NotifyIMEStatus(HWND hwnd, UINT status);
 extern BOOL macdrv_SetIMECompositionRect(HWND hwnd, RECT rect);
+extern BOOL decorated_mode;
 extern BOOL macdrv_SystemParametersInfo(UINT action, UINT int_param, void *ptr_param,
                                         UINT flags);
 extern BOOL macdrv_ProcessEvents(DWORD mask);

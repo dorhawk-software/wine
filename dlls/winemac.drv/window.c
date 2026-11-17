@@ -110,8 +110,8 @@ static BOOL region_covers_window(HWND hwnd)
  * Whether the app draws the window's whole frame, so Wine draws none: win32u then leaves the
  * visible rect the whole window rect. A maximized window at the default maximize's place shows
  * only within the area it maximizes over (win32u's get_visible_rect), so for one, the reasons
- * win32u has are asked instead: the window is all client area, it's shaped, or its style has no
- * frame Wine draws.
+ * win32u has are asked instead: the window is all client area, it's shaped, Wine draws no frames
+ * (the "Decorated" option off), or its style has no frame Wine draws.
  */
 static BOOL draws_own_frame(UINT style, UINT ex_style, BOOL shaped, const struct window_rects *rects)
 {
@@ -119,7 +119,7 @@ static BOOL draws_own_frame(UINT style, UINT ex_style, BOOL shaped, const struct
 
     if (EqualRect(&rects->window, &rects->visible)) return TRUE;
     if (!(style & WS_MAXIMIZE) || (style & WS_CHILD)) return FALSE;
-    if (EqualRect(&rects->window, &rects->client) || shaped) return TRUE;
+    if (EqualRect(&rects->window, &rects->client) || shaped || !decorated_mode) return TRUE;
     wf = get_window_features_for_style(style, ex_style, FALSE);
     return !wf.title_bar && !wf.shadow;
 }
