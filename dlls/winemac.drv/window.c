@@ -1862,11 +1862,13 @@ static BOOL moved_whole(const RECT *visible, const RECT *start, const MONITORINF
     double width = (visible->right - visible->left) / scale, height = (visible->bottom - visible->top) / scale;
     double start_width = (start->right - start->left) / start_scale, start_height = (start->bottom - start->top) / start_scale;
 
-    /* the same width; the height may differ by a title bar, as a display of another DPI gives the
-     * window's title bar and borders another size */
-    if (fabs(width - start_width) <= 2 && fabs(height - start_height) <= 40) return TRUE;
-    return visible->left <= end_info->rcWork.left + points(visible, 2) &&
-           visible->right >= end_info->rcWork.right - points(visible, 2) && height >= start_height - 2;
+    /* the same width, or as wide as the new work area; the height may differ by a title bar, as a
+     * display of another DPI gives the window's title bar and borders another size. A window that
+     * is any taller is a window tool's tile of a taller display, not a maximize macOS held short. */
+    if (fabs(height - start_height) > 40) return FALSE;
+    return fabs(width - start_width) <= 2 ||
+           (visible->left <= end_info->rcWork.left + points(visible, 2) &&
+            visible->right >= end_info->rcWork.right - points(visible, 2));
 }
 
 
@@ -1905,6 +1907,7 @@ void macdrv_window_frame_changed(HWND hwnd, const macdrv_event *event)
      * window's frame: macdrv_window_frame_settled judges the result once the frame stops changing. */
     if (!EqualRect(&visible, &old_visible) && !event->window_frame_changed.fullscreen &&
         !event->window_frame_changed.in_resize && !being_dragged && !data->frame_gesture &&
+        !event->window_frame_changed.skip_size_move_loop &&
         (NtUserGetWindowLongW(hwnd, GWL_STYLE) & WS_MAXIMIZE))
     {
         data->frame_gesture = TRUE;
@@ -2028,8 +2031,8 @@ void macdrv_window_frame_settled(HWND hwnd)
     /* Moved to another display, the window may not fill it and still be meant to: a window tool may
      * move it without a new size, and macOS may hold a window's height to the display it leaves
      * (never its width), so a "maximize on the next display" can come out short. Such a window is
-     * the size it was, or as wide as the new work area and at least as tall as it was; a window
-     * tool's halves, thirds and other tiles aren't. */
+     * the size it was, or as wide as the new work area and as tall as it was, give or take a title
+     * bar; a window tool's halves, thirds and other tiles aren't. */
     if (!end_fills && (same_display || !moved_whole(&visible, &start, &end_info)))
     {
         TRACE("%p no longer fills a display: it restores to %s\n", hwnd, wine_dbgstr_rect(&window));
