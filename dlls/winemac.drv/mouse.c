@@ -783,41 +783,40 @@ static BOOL get_icon_info(HICON handle, ICONINFOEXW *ret)
 /***********************************************************************
  *              cursor_points_per_pixel
  *
- * A cursor loaded from a resource (Windows' own, or the app's) comes in the size for the DPI of
- * the window's thread: 32 pixels at 96 DPI, 64 at 192. In Retina mode a pixel is half a point, and
- * a cursor is shown at a point per pixel, as the Mac's own are, so one loaded for 192 DPI would be
- * twice the Mac pointer's size: it covers as many points as it would have pixels at 96 DPI.
- * Without Retina mode a pixel is a point, and the cursor keeps the scale the app's windows have.
- * A cursor an app makes from its own bitmaps, as games do, isn't sized for the DPI and keeps a
- * point per pixel.
+ * How many points a cursor covers per pixel. Windows shows every cursor at its size in pixels, and
+ * loads one from a resource in the size for the DPI: 32 pixels at 96 DPI, 64 at 192. In Retina
+ * mode a cursor covers 96 / DPI points per pixel, the DPI of the window it's set for: at 96 DPI a
+ * point per pixel, as the Mac's own cursors do; at 192 a display pixel per pixel, as on Windows.
+ * Without Retina mode a pixel is a point.
  */
-static double cursor_points_per_pixel(HWND hwnd, const ICONINFOEXW *info)
+static double cursor_points_per_pixel(HWND hwnd)
 {
     UINT dpi;
 
-    if (!info->szModName[0] || !retina_on) return 1;
+    if (!retina_on) return 1;
     if (!hwnd || !(dpi = NtUserGetDpiForWindow(hwnd))) dpi = NtUserGetSystemDpiForProcess(NULL);
     return dpi ? 96.0 / dpi : 1;
 }
 
 
 /***********************************************************************
- *              with_points_per_pixel
+ *              copy_with_points_per_pixel
  *
- * The cursor's frames, each with "pointsPerPixel": how many points the image covers per pixel.
+ * A copy of the cursor's frames, each with "pointsPerPixel", or NULL when they need none. The
+ * cache keeps the frames unscaled: the same cursor can be set for windows of different DPIs.
  */
-static CFArrayRef with_points_per_pixel(CFArrayRef frames, double points_per_pixel)
+static CFArrayRef copy_with_points_per_pixel(CFArrayRef frames, double points_per_pixel)
 {
     CFMutableArrayRef scaled;
     CFNumberRef number;
     CFIndex i, count = CFArrayGetCount(frames);
 
-    if (points_per_pixel == 1) return frames;
-    if (!(scaled = CFArrayCreateMutable(NULL, count, &kCFTypeArrayCallBacks))) return frames;
+    if (points_per_pixel == 1) return NULL;
+    if (!(scaled = CFArrayCreateMutable(NULL, count, &kCFTypeArrayCallBacks))) return NULL;
     if (!(number = CFNumberCreate(NULL, kCFNumberDoubleType, &points_per_pixel)))
     {
         CFRelease(scaled);
-        return frames;
+        return NULL;
     }
     for (i = 0; i < count; i++)
     {
@@ -831,10 +830,9 @@ static CFArrayRef with_points_per_pixel(CFArrayRef frames, double points_per_pix
     if (i < count)
     {
         CFRelease(scaled);
-        return frames;
+        return NULL;
     }
     TRACE("cursor shown at %g points per pixel\n", points_per_pixel);
-    CFRelease(frames);
     return scaled;
 }
 
@@ -905,8 +903,6 @@ void macdrv_SetCursor(HWND hwnd, HCURSOR cursor)
             }
             else
                 cursor_frames = create_monochrome_cursor(hdc, &info, bm.bmWidth, bm.bmHeight);
-            if (cursor_frames)
-                cursor_frames = with_points_per_pixel(cursor_frames, cursor_points_per_pixel(hwnd, &info));
 
             NtGdiDeleteObjectApp(info.hbmMask);
             NtGdiDeleteObjectApp(hdc);
@@ -927,6 +923,16 @@ void macdrv_SetCursor(HWND hwnd, HCURSOR cursor)
     }
 
 done:
+    if (cursor_frames)
+    {
+        CFArrayRef scaled = copy_with_points_per_pixel(cursor_frames, cursor_points_per_pixel(hwnd));
+
+        if (scaled)
+        {
+            CFRelease(cursor_frames);
+            cursor_frames = scaled;
+        }
+    }
     TRACE("setting cursor with cursor_name %s cursor_frames %p\n", debugstr_cf(cursor_name), cursor_frames);
     macdrv_set_cursor(cursor_name, cursor_frames);
     if (cursor_name) CFRelease(cursor_name);
