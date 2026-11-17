@@ -1826,20 +1826,25 @@ static BOOL reaches_work_area(const RECT *visible, MONITORINFO *info)
 
 /* whether a visible rect on another display is the window moved there whole, not tiled: see
  * macdrv_window_frame_settled */
-static BOOL moved_whole(const RECT *visible, const RECT *start, const MONITORINFO *end_info)
+static BOOL moved_whole(const RECT *visible, const RECT *start, const MONITORINFO *start_info,
+                        const MONITORINFO *end_info)
 {
     /* sizes in points: the two displays may have different pixels per point */
     double scale = scale_of(visible), start_scale = scale_of(start);
     double width = (visible->right - visible->left) / scale, height = (visible->bottom - visible->top) / scale;
     double start_width = (start->right - start->left) / start_scale, start_height = (start->bottom - start->top) / start_scale;
+    double end_bottom = (visible->bottom - end_info->rcMonitor.top) / scale;
+    double start_display_height = (start_info->rcMonitor.bottom - start_info->rcMonitor.top) / start_scale;
 
-    /* the same width, or as wide as the new work area; the height may differ by a title bar, as a
-     * display of another DPI gives the window's title bar and borders another size. A window that
-     * is any taller is a window tool's tile of a taller display, not a maximize macOS held short. */
-    if (fabs(height - start_height) > 40) return FALSE;
-    return fabs(width - start_width) <= 2 ||
-           (visible->left <= end_info->rcWork.left + points(visible, 2) &&
-            visible->right >= end_info->rcWork.right - points(visible, 2));
+    /* the same size, give or take a title bar, as a display of another DPI gives the window's
+     * title bar and borders another size */
+    if (fabs(width - start_width) <= 2 && fabs(height - start_height) <= 40) return TRUE;
+    /* as wide as the new work area, and held to the height of the display it left: macOS keeps the
+     * bottom of a frame a window tool sets there no lower than that display's (measured with displays
+     * whose tops line up). A window tool's full-width tile of a taller display ends elsewhere. */
+    return visible->left <= end_info->rcWork.left + points(visible, 2) &&
+           visible->right >= end_info->rcWork.right - points(visible, 2) &&
+           fabs(end_bottom - start_display_height) <= 2;
 }
 
 
@@ -1886,9 +1891,10 @@ void macdrv_window_frame_changed(HWND hwnd, const macdrv_event *event)
     }
 
     /* A maximized window that draws its own frame hangs its border past the work area, where win32u
-     * hides it. Moved by a window tool, it isn't there any more: the frame the tool gives it is all
-     * of the window, or the hidden border would show past the frame's edges. */
-    if (data->frame_gesture && data->own_frame)
+     * hides it. Moved or sized from the Mac side, it isn't where the default maximize put it any
+     * more, so win32u shows all of it: the new frame is the whole window, or the border would show
+     * past the frame's edges, and the Mac window and win32u's visible rect wouldn't agree. */
+    if (data->own_frame && !EqualRect(&visible, &old_visible))
         rect = visible;
     else
         rect = window_rect_from_visible(&data->rects, visible);
@@ -2002,9 +2008,9 @@ void macdrv_window_frame_settled(HWND hwnd)
     /* Moved to another display, the window may not fill it and still be meant to: a window tool may
      * move it without a new size, and macOS may hold a window's height to the display it leaves
      * (never its width), so a "maximize on the next display" can come out short. Such a window is
-     * the size it was, or as wide as the new work area and as tall as it was, give or take a title
-     * bar; a window tool's halves, thirds and other tiles aren't. */
-    if (!end_fills && (same_display || !moved_whole(&visible, &start, &end_info)))
+     * the size it was, or as wide as the new work area and held to the height of the display it
+     * left; a window tool's halves, thirds and other tiles aren't. */
+    if (!end_fills && (same_display || !moved_whole(&visible, &start, &start_info, &end_info)))
     {
         TRACE("%p no longer fills a display: it restores to %s\n", hwnd, wine_dbgstr_rect(&window));
         NtUserSetRawWindowPos(hwnd, window, 0, TRUE);
