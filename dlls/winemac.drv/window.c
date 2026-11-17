@@ -105,51 +105,23 @@ static BOOL region_covers_window(HWND hwnd)
 
 
 /***********************************************************************
- *              maximized_area
- *
- * The part of a monitor that a maximized window shows in: the work area, or the whole monitor for
- * a popup without a caption (win32u's get_visible_rect).
- */
-static RECT maximized_area(UINT style, const MONITORINFO *info)
-{
-    if ((style & WS_MAXIMIZEBOX) && ((style & WS_CAPTION) == WS_CAPTION || !(style & WS_POPUP)))
-        return info->rcWork;
-    return info->rcMonitor;
-}
-
-
-/***********************************************************************
  *              draws_own_frame
  *
- * Whether the app draws the window's whole frame: win32u leaves the visible rect the whole window
- * rect. A maximized window shows only within the work area of its monitor (or the monitor, for a
- * popup without a caption), so for one, the visible rect is the window rect clipped to that.
- * The window's style and rects are the new ones; call it without the window data locked.
+ * Whether the app draws the window's whole frame, so Wine draws none: win32u then leaves the
+ * visible rect the whole window rect. A maximized window at the default maximize's place shows
+ * only within the area it maximizes over (win32u's get_visible_rect), so for one, the reasons
+ * win32u has are asked instead: the window is all client area, it's shaped, or its style has no
+ * frame Wine draws.
  */
-static BOOL draws_own_frame(UINT style, const struct window_rects *rects)
+static BOOL draws_own_frame(UINT style, UINT ex_style, BOOL shaped, const struct window_rects *rects)
 {
-    MONITORINFO info = {.cbSize = sizeof(info)};
-    HMONITOR monitor;
-    RECT area, clipped;
-    UINT context;
-    BOOL ret = FALSE;
+    struct macdrv_window_features wf;
 
     if (EqualRect(&rects->window, &rects->visible)) return TRUE;
     if (!(style & WS_MAXIMIZE) || (style & WS_CHILD)) return FALSE;
-
-    context = NtUserSetThreadDpiAwarenessContext(NTUSER_DPI_PER_MONITOR_AWARE_V2);
-    if ((monitor = NtUserMonitorFromRect(&rects->window, MONITOR_DEFAULTTONEAREST)) &&
-        NtUserGetMonitorInfo(monitor, &info))
-    {
-        area = maximized_area(style, &info);
-        clipped.left = max(rects->window.left, area.left);
-        clipped.top = max(rects->window.top, area.top);
-        clipped.right = min(rects->window.right, area.right);
-        clipped.bottom = min(rects->window.bottom, area.bottom);
-        ret = EqualRect(&clipped, &rects->visible);
-    }
-    NtUserSetThreadDpiAwarenessContext(context);
-    return ret;
+    if (EqualRect(&rects->window, &rects->client) || shaped) return TRUE;
+    wf = get_window_features_for_style(style, ex_style, FALSE);
+    return !wf.title_bar && !wf.shadow;
 }
 
 
@@ -1726,7 +1698,6 @@ void macdrv_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT
     struct macdrv_win_data *data;
     unsigned int new_style = NtUserGetWindowLongW(hwnd, GWL_STYLE);
     struct window_rects old_rects;
-    BOOL own_frame = draws_own_frame(new_style, new_rects);
 
     if (!(data = get_win_data(hwnd))) return;
 
@@ -1734,7 +1705,7 @@ void macdrv_WindowPosChanged(HWND hwnd, HWND insert_after, HWND owner_hint, UINT
 
     old_rects = data->rects;
     data->rects = *new_rects;
-    data->own_frame = own_frame;
+    data->own_frame = draws_own_frame(new_style, NtUserGetWindowLongW(hwnd, GWL_EXSTYLE), data->shaped, new_rects);
     if (!(new_style & WS_MAXIMIZE))
     {
         data->frame_gesture = FALSE;
