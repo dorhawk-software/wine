@@ -84,17 +84,21 @@ static struct macdrv_window_features get_window_features_for_style(DWORD style, 
  *
  * Whether the window's region is one rectangle that covers the whole window. Ribbon libraries set
  * such a region: it doesn't change the window's outline, so it isn't a shape.
+ *
+ * The region is in the window's own coordinates, at its DPI, so it is compared with the window's
+ * rect at that DPI, never with the driver's rects, which are in raw monitor pixels.
  */
-static BOOL region_covers_window(HWND hwnd, const RECT *window)
+static BOOL region_covers_window(HWND hwnd)
 {
     HRGN region = NtGdiCreateRectRgn(0, 0, 0, 0);
-    RECT box;
+    RECT box, window;
     BOOL ret = FALSE;
 
     if (!region) return FALSE;
-    if (NtUserGetWindowRgnEx(hwnd, region, 0) != ERROR && NtGdiGetRgnBox(region, &box) == SIMPLEREGION)
-        ret = box.left <= 0 && box.top <= 0 && box.right >= window->right - window->left &&
-              box.bottom >= window->bottom - window->top;
+    if (NtUserGetWindowRgnEx(hwnd, region, 0) == SIMPLEREGION && NtGdiGetRgnBox(region, &box) == SIMPLEREGION &&
+        NtUserGetWindowRect(hwnd, &window, NtUserGetDpiForWindow(hwnd)))
+        ret = box.left <= 0 && box.top <= 0 && box.right >= window.right - window.left &&
+              box.bottom >= window.bottom - window.top;
     NtGdiDeleteObjectApp(region);
     return ret;
 }
@@ -160,9 +164,9 @@ static struct macdrv_window_features get_cocoa_window_features(struct macdrv_win
     if (data->own_frame)
     {
         /* The app draws its own frame, but a sizing border still lets the user resize the
-         * window: let macOS and its window tools resize it too. */
-        if ((style & WS_THICKFRAME) &&
-            (!data->shaped || region_covers_window(data->hwnd, &data->rects.window)))
+         * window. The Cocoa window stays borderless, so its edges are the app's, as on Windows
+         * (WM_NCHITTEST); resizable lets window tools resize it through Accessibility. */
+        if ((style & WS_THICKFRAME) && (!data->shaped || region_covers_window(data->hwnd)))
             wf.resizable = TRUE;
         return wf;
     }

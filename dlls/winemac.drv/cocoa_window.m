@@ -77,11 +77,7 @@ static NSUInteger style_mask_for_features(const struct macdrv_window_features* w
         if (wf->resizable || wf->maximize_button) style_mask |= NSWindowStyleMaskResizable;
         if (wf->utility) style_mask |= NSWindowStyleMaskUtilityWindow;
     }
-    else
-    {
-        style_mask = NSWindowStyleMaskBorderless;
-        if (wf->resizable) style_mask |= NSWindowStyleMaskResizable;
-    }
+    else style_mask = NSWindowStyleMaskBorderless;
 
     if (wf->prevents_app_activation) style_mask |= NSWindowStyleMaskNonactivatingPanel;
 
@@ -1059,6 +1055,48 @@ static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
     {
         BOOL preventForClipping = cursor_clipping_locks_windows && [[WineApplicationController sharedController] clippingCursor];
         return ([self styleMask] & NSWindowStyleMaskResizable) && (disabled || !resizable || preventForClipping);
+    }
+
+    /* A window that draws its own frame is borderless to AppKit, so AppKit doesn't resize it from
+     * its edges: those are the app's, through WM_NCHITTEST, as on Windows. AppKit also refuses to
+     * let window tools resize it through Accessibility, but its sizing border lets the user resize
+     * it, so they may. */
+    - (BOOL) allowsAccessibilityResize
+    {
+        BOOL preventForClipping = cursor_clipping_locks_windows && [[WineApplicationController sharedController] clippingCursor];
+        return !([self styleMask] & NSWindowStyleMaskResizable) && resizable && !disabled && !preventForClipping;
+    }
+
+    /* AppKit answers other apps' Accessibility requests for a window through these. */
+    - (BOOL) accessibilityIsAttributeSettable:(NSString*)attribute
+    {
+        if ([attribute isEqualToString:NSAccessibilitySizeAttribute] && [self allowsAccessibilityResize])
+            return YES;
+        return [super accessibilityIsAttributeSettable:attribute];
+    }
+
+    - (void) accessibilitySetValue:(id)value forAttribute:(NSString*)attribute
+    {
+        if ([attribute isEqualToString:NSAccessibilitySizeAttribute] && [self allowsAccessibilityResize] &&
+            [value isKindOfClass:[NSValue class]])
+            [self resizeForAccessibility:[value sizeValue]];
+        else
+            [super accessibilitySetValue:value forAttribute:attribute];
+    }
+
+    - (void) resizeForAccessibility:(NSSize)size
+    {
+        NSRect frame = [self frame], content;
+
+        content = [self contentRectForFrameRect:NSMakeRect(0, 0, size.width, size.height)];
+        content.size.width = MIN(MAX(content.size.width, savedContentMinSize.width), savedContentMaxSize.width);
+        content.size.height = MIN(MAX(content.size.height, savedContentMinSize.height), savedContentMaxSize.height);
+        size = [self frameRectForContentRect:content].size;
+
+        /* Keep the top left corner where it is, as AppKit does for a resizable window. */
+        frame.origin.y = NSMaxY(frame) - size.height;
+        frame.size = size;
+        [self setFrame:frame display:YES];
     }
 
     - (BOOL) allowsMovingWithMaximized:(BOOL)inMaximized
