@@ -270,7 +270,13 @@ static NSString* WineLocalizedString(unsigned int stringID)
             else
                 title = WineLocalizedString(STRING_MENU_ITEM_QUIT);
             item = [submenu addItemWithTitle:title action:@selector(terminate:) keyEquivalent:@"q"];
-            [item setKeyEquivalentModifierMask:NSEventModifierFlagCommand | NSEventModifierFlagOption];
+            /* With Command as Ctrl, Command-Q quits as in every Mac app instead of reaching the
+               program as Ctrl-Q, which most Windows programs ignore; otherwise it stays free for
+               the program's Alt-Q. */
+            if (left_command_is_ctrl || right_command_is_ctrl)
+                [item setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
+            else
+                [item setKeyEquivalentModifierMask:NSEventModifierFlagCommand | NSEventModifierFlagOption];
             item = [[[NSMenuItem alloc] init] autorelease];
             [item setTitle:WineLocalizedString(STRING_MENU_WINE)];
             [item setSubmenu:submenu];
