@@ -1182,6 +1182,7 @@ static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
 
         if (newStyle != currentStyle)
         {
+            BOOL wasIgnoringResize = ignore_windowResize;
             NSString* title = [[[self title] copy] autorelease];
             BOOL showingButtons = (currentStyle & (NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)) != 0;
             BOOL shouldShowButtons = (newStyle & (NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)) != 0;
@@ -1192,9 +1193,17 @@ static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
                 // just NSWindowStyleMaskTitled, the window buttons should disappear rather
                 // than just being disabled.  But they don't.  Similarly in reverse.
                 // The workaround is to also toggle NSWindowStyleMaskClosable at the same time.
+                ignore_windowResize = TRUE;
                 [self setStyleMask:newStyle ^ NSWindowStyleMaskClosable];
             }
+            /* Cocoa may move the window as its style changes, to keep a title bar it gains on
+               screen, or the window's content where it was when it loses one. That is Cocoa's
+               adjustment of what Wine set, reported as such (skipSizeMove), as after setFrame. */
+            ignore_windowResize = TRUE;
             [self setStyleMask:newStyle];
+            ignore_windowResize = wasIgnoringResize;
+            if (!ignore_windowResize && [self isOrderedIn])
+                [self windowDidResize:nil skipSizeMove:TRUE];
 
             BOOL isNonActivating = (currentStyle & NSWindowStyleMaskNonactivatingPanel) != 0;
             BOOL shouldBeNonActivating = (newStyle & NSWindowStyleMaskNonactivatingPanel) != 0;
