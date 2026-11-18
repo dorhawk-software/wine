@@ -140,6 +140,8 @@ static struct macdrv_window_features get_cocoa_window_features(struct macdrv_win
          * (WM_NCHITTEST); resizable lets window tools resize it through Accessibility. */
         if ((style & WS_THICKFRAME) && (!data->shaped || region_covers_window(data->hwnd)))
             wf.resizable = TRUE;
+        /* Its minimize box is the app's to draw, but Window > Minimize still asks for it. */
+        if (style & WS_MINIMIZEBOX) wf.minimize_button = TRUE;
         return wf;
     }
 

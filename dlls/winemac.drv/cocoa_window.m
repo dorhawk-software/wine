@@ -301,6 +301,7 @@ static inline BOOL stage_manager_enabled(void)
 
 @property (assign, nonatomic) void* himc;
 @property (nonatomic) BOOL commandDone;
+@property (nonatomic) BOOL minimizeBox;
 
 @property (readonly, copy, nonatomic) NSArray* childWineWindows;
 
@@ -959,7 +960,7 @@ static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
     @synthesize minimizeAwaitingStart;
     @synthesize shapeChangedSinceLastDraw;
     @synthesize usePerPixelAlpha;
-    @synthesize himc, commandDone;
+    @synthesize himc, commandDone, minimizeBox;
     @synthesize contentViewMaskLayer;
 
     + (WineWindow*) createWindowWithFeatures:(const struct macdrv_window_features*)wf
@@ -1179,6 +1180,7 @@ static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
         NSUInteger newStyle = style_mask_for_features(wf) | (currentStyle & ~usedStyles);
 
         self.preventsAppActivation = wf->prevents_app_activation;
+        self.minimizeBox = wf->minimize_button;
 
         if (newStyle != currentStyle)
         {
@@ -2451,6 +2453,10 @@ static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
             ret = [self isKeyWindow] || (!self.disabled && !self.noForeground);
         if ([menuItem action] == @selector(toggleFullScreen:) && (self.disabled || maximized))
             ret = NO;
+        /* A window that draws its own frame has no Cocoa minimize button, but the app's own
+           minimize box is enough for Window > Minimize. */
+        if ([menuItem action] == @selector(performMiniaturize:) && !(self.styleMask & NSWindowStyleMaskTitled))
+            ret = self.minimizeBox && !self.disabled;
 
         return ret;
     }
@@ -2563,6 +2569,16 @@ static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
 
             [super sendEvent:event];
         }
+    }
+
+    - (void) performMiniaturize:(id)sender
+    {
+        if (self.styleMask & NSWindowStyleMaskTitled)
+            [super performMiniaturize:sender];
+        else if (self.minimizeBox && !self.disabled)
+            [self miniaturize:sender];
+        else
+            NSBeep();
     }
 
     - (void) miniaturize:(id)sender

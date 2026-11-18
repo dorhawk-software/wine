@@ -230,6 +230,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
             NSString* bundleName;
             NSString* title;
             NSMenuItem* item;
+            BOOL mac_keys;
 
             [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
@@ -243,6 +244,10 @@ static NSString* WineLocalizedString(unsigned int stringID)
             }
 
             mainMenu = [[[NSMenu alloc] init] autorelease];
+            /* With Command as Ctrl, the Mac's own Command keys (Quit, Hide, Minimize) work as in
+               every Mac app instead of reaching the program as Ctrl keys; otherwise they stay
+               free for the program's Alt keys. */
+            mac_keys = left_command_is_ctrl || right_command_is_ctrl;
 
             // Application menu
             submenu = [[[NSMenu alloc] initWithTitle:WineLocalizedString(STRING_MENU_WINE)] autorelease];
@@ -252,7 +257,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
                 title = [NSString stringWithFormat:WineLocalizedString(STRING_MENU_ITEM_HIDE_APPNAME), bundleName];
             else
                 title = WineLocalizedString(STRING_MENU_ITEM_HIDE);
-            item = [submenu addItemWithTitle:title action:@selector(hide:) keyEquivalent:@""];
+            item = [submenu addItemWithTitle:title action:@selector(hide:) keyEquivalent:mac_keys ? @"h" : @""];
 
             item = [submenu addItemWithTitle:WineLocalizedString(STRING_MENU_ITEM_HIDE_OTHERS)
                                       action:@selector(hideOtherApplications:)
@@ -270,10 +275,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
             else
                 title = WineLocalizedString(STRING_MENU_ITEM_QUIT);
             item = [submenu addItemWithTitle:title action:@selector(terminate:) keyEquivalent:@"q"];
-            /* With Command as Ctrl, Command-Q quits as in every Mac app instead of reaching the
-               program as Ctrl-Q, which most Windows programs ignore; otherwise it stays free for
-               the program's Alt-Q. */
-            if (left_command_is_ctrl || right_command_is_ctrl)
+            if (mac_keys)
                 [item setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
             else
                 [item setKeyEquivalentModifierMask:NSEventModifierFlagCommand | NSEventModifierFlagOption];
@@ -286,7 +288,7 @@ static NSString* WineLocalizedString(unsigned int stringID)
             submenu = [[[NSMenu alloc] initWithTitle:WineLocalizedString(STRING_MENU_WINDOW)] autorelease];
             [submenu addItemWithTitle:WineLocalizedString(STRING_MENU_ITEM_MINIMIZE)
                                action:@selector(performMiniaturize:)
-                        keyEquivalent:@""];
+                        keyEquivalent:mac_keys ? @"m" : @""];
             [submenu addItemWithTitle:WineLocalizedString(STRING_MENU_ITEM_ZOOM)
                                action:@selector(performZoom:)
                         keyEquivalent:@""];
