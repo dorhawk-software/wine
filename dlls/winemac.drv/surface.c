@@ -84,6 +84,16 @@ static BOOL macdrv_surface_flush(struct window_surface *window_surface, const RE
     CGColorSpaceRef colorspace;
     CGImageRef image;
     struct macdrv_win_data *data;
+    BOOL minimized = FALSE;
+
+    /* Windows draws a window it minimized at its small parked size. The Mac window keeps the
+     * picture it had: the Dock shows it, and it comes back with the window. */
+    if ((data = get_win_data(window_surface->hwnd)))
+    {
+        minimized = data->minimized;
+        release_win_data(data);
+    }
+    if (minimized) return TRUE;
 
     colorspace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     image = CGImageCreate(color_info->bmiHeader.biWidth, abs(color_info->bmiHeader.biHeight), 8, 32,
