@@ -5098,15 +5098,24 @@ static BOOL show_window( HWND hwnd, INT cmd )
     }
 
     if (IsRectEmpty( &newPos )) new_swp = swp;
-    else if ((new_swp = user_driver->pShowWindow( hwnd, cmd, &newPos, swp )) == ~0)
+    else
     {
-        if (get_window_long( hwnd, GWL_STYLE ) & WS_CHILD) new_swp = swp;
-        else if (is_iconic( hwnd ) && (newPos.left != -32000 || newPos.top != -32000))
+        RECT asked = newPos;
+
+        if ((new_swp = user_driver->pShowWindow( hwnd, cmd, &newPos, swp )) == ~0)
         {
-            OffsetRect( &newPos, -32000 - newPos.left, -32000 - newPos.top );
-            new_swp = swp & ~(SWP_NOMOVE | SWP_NOCLIENTMOVE);
+            if (get_window_long( hwnd, GWL_STYLE ) & WS_CHILD) new_swp = swp;
+            else if (is_iconic( hwnd ) && (newPos.left != -32000 || newPos.top != -32000))
+            {
+                OffsetRect( &newPos, -32000 - newPos.left, -32000 - newPos.top );
+                new_swp = swp & ~(SWP_NOMOVE | SWP_NOCLIENTMOVE);
+            }
+            else new_swp = swp;
         }
-        else new_swp = swp;
+        /* A driver that takes the window manager's rect for a window being restored gives it in
+         * raw coordinates, as its own window rects are; SetWindowPos below takes the thread's. */
+        else if (!is_iconic( hwnd ) && !EqualRect( &asked, &newPos ))
+            newPos = map_rect_raw_to_virt( newPos, get_thread_dpi() );
     }
     swp = new_swp;
 
