@@ -42,6 +42,8 @@
     BOOL closing;
     WineWindow* latentParentWindow;
     NSMutableArray* latentChildWindows;
+    WineWindow* dragParent;
+    NSInteger levelBeforeDrag;
 
     void* hwnd;
     WineEventQueue* queue;
@@ -110,5 +112,8 @@
     - (void) updateForCursorClipping;
 
     - (void) setRetinaMode:(BOOL)mode;
+
+    - (void) detachForDrag;
+    - (void) reattachAfterDrag;
 
 @end

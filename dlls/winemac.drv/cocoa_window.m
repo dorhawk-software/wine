@@ -1048,6 +1048,7 @@ static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
         [queue release];
         [latentChildWindows release];
         [latentParentWindow release];
+        [dragParent release];
         [contentViewMaskLayer release];
         [super dealloc];
     }
@@ -1254,6 +1255,11 @@ static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
             level = NSFloatingWindowLevel;
         else
             level = NSNormalWindowLevel;
+
+        /* Out of its parent for a drag (detachForDrag): above the parent, or the
+         * click that started the drag brings the parent over it. */
+        if (dragParent && level <= [dragParent level])
+            level = [dragParent level] + 1;
 
         if (active)
         {
@@ -1565,6 +1571,39 @@ static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
         return reordered;
     }
 
+    /* An owned window (a dialog) is a Cocoa child of its owner. macOS drags a child window
+     * from the app's main thread, a step at a time, so it moves choppily, where the window
+     * server drags a window on its own smoothly (FileZilla's Site Manager against its main
+     * window). So for its drag a child leaves its parent, one level above it so the click
+     * that started the drag can't bring the parent over it, and joins it again when the drag
+     * ends (reattachAfterDrag). */
+    - (void) detachForDrag
+    {
+        WineWindow* parent = (WineWindow*)[self parentWindow];
+
+        if (dragParent || ![parent isKindOfClass:[WineWindow class]]) return;
+
+        dragParent = [parent retain];
+        levelBeforeDrag = [self level];
+        [parent removeChildWindow:self];
+        [self setLevel:[parent level] + 1];
+    }
+
+    - (void) reattachAfterDrag
+    {
+        WineWindow* parent = dragParent;
+
+        if (!parent) return;
+
+        dragParent = nil;
+        [self setLevel:levelBeforeDrag];
+        /* As a child again, or a latent one if either was hidden meanwhile. */
+        if (![self parentWindow] && !latentParentWindow)
+            [parent addChildWineWindow:self];
+        [parent release];
+        [[WineApplicationController sharedController] adjustWindowLevels];
+    }
+
     - (void) becameIneligibleChild
     {
         WineWindow* parent = (WineWindow*)[self parentWindow];
@@ -1858,6 +1897,8 @@ static CGRect local_mac_from_win(NSWindow *window, CGRect rect)
 
         [self endWindowDragging];
         [controller windowWillOrderOut:self];
+        /* Back with its parent first, so it becomes a latent child as any other. */
+        [self reattachAfterDrag];
 
         if (enteringFullScreen || exitingFullScreen)
         {

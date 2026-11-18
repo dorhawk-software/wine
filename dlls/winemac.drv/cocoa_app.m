@@ -2054,7 +2054,10 @@ static NSString* WineLocalizedString(unsigned int stringID)
                     usingBlock:^(NSNotification *note){
             NSWindow* window = [note object];
             if ([window isKindOfClass:[WineWindow class]])
+            {
+                [(WineWindow *)window detachForDrag];
                 [self handleWindowDrag:(WineWindow *)window begin:YES];
+            }
         }];
 
         [nc addObserverForName:NSWindowDidEndDraggingNotification
@@ -2063,7 +2066,14 @@ static NSString* WineLocalizedString(unsigned int stringID)
                     usingBlock:^(NSNotification *note){
             NSWindow* window = [note object];
             if ([window isKindOfClass:[WineWindow class]])
+            {
                 [self handleWindowDrag:(WineWindow *)window begin:NO];
+                /* Once macOS has finished the drag: attached sooner, the next click on the
+                 * window brought its parent over it. */
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [(WineWindow *)window reattachAfterDrag];
+                });
+            }
         }];
 
         [nc addObserver:self
